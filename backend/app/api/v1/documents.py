@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -20,6 +20,7 @@ from app.services.vector_store import (
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".html", ".htm", ".txt", ".md"}
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
 async def _process_document(
@@ -76,6 +77,7 @@ async def upload_document(
     file: UploadFile,
     background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_db)],
+    collection_name: Annotated[str, Form()] = "General",
 ):
     from pathlib import Path
 
@@ -89,6 +91,8 @@ async def upload_document(
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Files must be 25 MB or smaller.")
 
     doc_id = uuid.uuid4()
     await insert_document(
@@ -97,6 +101,7 @@ async def upload_document(
         filename=file.filename or "unknown",
         file_type=suffix.lstrip("."),
         file_size=len(file_bytes),
+        collection_name=collection_name.strip()[:120] or "General",
     )
 
     background_tasks.add_task(
