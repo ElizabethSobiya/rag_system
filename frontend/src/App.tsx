@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent, FormEvent } from 'react'
 import './App.css'
 
@@ -26,14 +26,26 @@ export default function App() {
   const [dark, setDark] = useState(false)
   const [showInspector, setShowInspector] = useState(false)
   const [activeCitation, setActiveCitation] = useState<Citation | null>(null)
+  const streamRenderFrame = useRef<number | null>(null)
 
   const collections = useMemo(() => [...new Set(documents.map(d => d.collection_name))], [documents])
   const visibleDocs = filterCollection === 'All collections' ? documents : documents.filter(d => d.collection_name === filterCollection)
 
-  async function loadDocuments() {
-    try { setDocuments(await (await fetch(`${API}/api/v1/documents/`)).json()) } catch { setError('Cannot reach the API. Start the FastAPI backend to use the workspace.') }
-  }
-  useEffect(() => { loadDocuments(); const timer = window.setInterval(loadDocuments, 5000); return () => window.clearInterval(timer) }, [])
+  const loadDocuments = useCallback(async () => {
+    try {
+      const response = await fetch(`${API}/api/v1/documents/`)
+      if (!response.ok) throw new Error('Document request failed.')
+      setDocuments(await response.json())
+    } catch { setError('Cannot reach the API. Start the FastAPI backend to use the workspace.') }
+  }, [])
+
+  useEffect(() => { void loadDocuments() }, [loadDocuments])
+  useEffect(() => {
+    if (!documents.some(document => document.status === 'processing')) return
+    const timer = window.setTimeout(() => { void loadDocuments() }, 2500)
+    return () => window.clearTimeout(timer)
+  }, [documents, loadDocuments])
+  useEffect(() => () => { if (streamRenderFrame.current) cancelAnimationFrame(streamRenderFrame.current) }, [])
 
   async function uploadFiles(files: FileList | File[]) {
     if (!files.length) return
@@ -49,7 +61,11 @@ export default function App() {
   }
   function onDrop(event: DragEvent<HTMLDivElement>) { event.preventDefault(); setDragging(false); uploadFiles(event.dataTransfer.files) }
   function chooseFiles(event: ChangeEvent<HTMLInputElement>) { if (event.target.files) uploadFiles(event.target.files); event.target.value = '' }
-  async function removeDocument(id: string) { await fetch(`${API}/api/v1/documents/${id}`, { method: 'DELETE' }); setSelectedIds(ids => ids.filter(item => item !== id)); loadDocuments() }
+  async function removeDocument(id: string) {
+    const response = await fetch(`${API}/api/v1/documents/${id}`, { method: 'DELETE' })
+    if (!response.ok) { setError('Unable to delete this document.'); return }
+    setSelectedIds(ids => ids.filter(item => item !== id)); void loadDocuments()
+  }
 
   async function ask(event: FormEvent) {
     event.preventDefault(); const query = question.trim(); if (!query || loading) return
@@ -59,11 +75,15 @@ export default function App() {
       const response = await fetch(`${API}/api/v1/query/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       if (!response.ok || !response.body) { const data = await response.json(); throw new Error(data.detail ?? 'Unable to answer this question.') }
       const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''; let fullAnswer = ''
-      const updateAnswer = (result?: Answer) => setMessages(old => old.map((message, index) => index === old.length - 1 ? { ...message, text: fullAnswer, result: result ?? message.result } : message))
+      const updateAnswer = (result?: Answer) => setMessages(old => [...old.slice(0, -1), { ...old[old.length - 1], text: fullAnswer, result: result ?? old[old.length - 1].result }])
+      const scheduleAnswerRender = () => {
+        if (streamRenderFrame.current !== null) return
+        streamRenderFrame.current = requestAnimationFrame(() => { streamRenderFrame.current = null; updateAnswer() })
+      }
       while (true) {
         const { value, done } = await reader.read(); if (done) break
         buffer += decoder.decode(value, { stream: true }); const events = buffer.split('\n\n'); buffer = events.pop() ?? ''
-        events.forEach(raw => { const line = raw.split('\n').find(item => item.startsWith('data: ')); if (!line) return; const item = JSON.parse(line.slice(6)); if (item.type === 'delta') { fullAnswer += item.text; updateAnswer() } else if (item.type === 'complete') updateAnswer({ answer: item.answer, citations: item.citations, confidence: item.confidence, evidence_status: item.evidence_status, retrieval_debug: item.retrieval_debug }) })
+        events.forEach(raw => { const line = raw.split('\n').find(item => item.startsWith('data: ')); if (!line) return; const item = JSON.parse(line.slice(6)); if (item.type === 'delta') { fullAnswer += item.text; scheduleAnswerRender() } else if (item.type === 'complete') { if (streamRenderFrame.current !== null) { cancelAnimationFrame(streamRenderFrame.current); streamRenderFrame.current = null }; updateAnswer({ answer: item.answer, citations: item.citations, confidence: item.confidence, evidence_status: item.evidence_status, retrieval_debug: item.retrieval_debug }) } })
       }
     } catch (e) { setError(e instanceof Error ? e.message : 'Request failed.') } finally { setLoading(false) }
   }

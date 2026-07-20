@@ -1,6 +1,5 @@
 """pgvector insert and similarity search helpers."""
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,28 +41,33 @@ async def insert_chunks(
     chunks: list[ChunkData],
     embeddings: list[list[float]],
 ) -> None:
-    """Bulk-insert chunks with their embeddings."""
-    for chunk, embedding in zip(chunks, embeddings):
-        await db.execute(
-            text(
-                """
-                INSERT INTO chunks
-                    (id, document_id, chunk_index, content, token_count, page_number, embedding, created_at)
-                VALUES
-                    (:id, :document_id, :chunk_index, :content, :token_count, :page_number,
-                     CAST(:embedding AS vector), NOW())
-                """
-            ),
-            {
-                "id": str(uuid.uuid4()),
-                "document_id": str(doc_id),
-                "chunk_index": chunk.chunk_index,
-                "content": chunk.content,
-                "token_count": chunk.token_count,
-                "page_number": chunk.page_number,
-                "embedding": str(embedding),
-            },
-        )
+    """Insert all chunks in one database round trip."""
+    if len(chunks) != len(embeddings):
+        raise ValueError("Each chunk must have exactly one embedding.")
+
+    statement = text(
+        """
+        INSERT INTO chunks
+            (id, document_id, chunk_index, content, token_count, page_number, embedding, created_at)
+        VALUES
+            (:id, :document_id, :chunk_index, :content, :token_count, :page_number,
+             CAST(:embedding AS vector), NOW())
+        """
+    )
+    values = [
+        {
+            "id": str(uuid.uuid4()),
+            "document_id": str(doc_id),
+            "chunk_index": chunk.chunk_index,
+            "content": chunk.content,
+            "token_count": chunk.token_count,
+            "page_number": chunk.page_number,
+            "embedding": str(embedding),
+        }
+        for chunk, embedding in zip(chunks, embeddings, strict=True)
+    ]
+    if values:
+        await db.execute(statement, values)
     await db.commit()
 
 
