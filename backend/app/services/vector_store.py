@@ -1,6 +1,5 @@
 """pgvector insert and similarity search helpers."""
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,12 +14,13 @@ async def insert_document(
     filename: str,
     file_type: str,
     file_size: int,
+    collection_name: str = "General",
 ) -> None:
     await db.execute(
         text(
             """
-            INSERT INTO documents (id, filename, file_type, file_size, status, created_at, updated_at)
-            VALUES (:id, :filename, :file_type, :file_size, 'processing', NOW(), NOW())
+            INSERT INTO documents (id, filename, file_type, file_size, collection_name, status, created_at, updated_at)
+            VALUES (:id, :filename, :file_type, :file_size, :collection_name, 'processing', NOW(), NOW())
             """
         ),
         {
@@ -28,6 +28,7 @@ async def insert_document(
             "filename": filename,
             "file_type": file_type,
             "file_size": file_size,
+            "collection_name": collection_name,
         },
     )
     await db.commit()
@@ -40,28 +41,33 @@ async def insert_chunks(
     chunks: list[ChunkData],
     embeddings: list[list[float]],
 ) -> None:
-    """Bulk-insert chunks with their embeddings."""
-    for chunk, embedding in zip(chunks, embeddings):
-        await db.execute(
-            text(
-                """
-                INSERT INTO chunks
-                    (id, document_id, chunk_index, content, token_count, page_number, embedding, created_at)
-                VALUES
-                    (:id, :document_id, :chunk_index, :content, :token_count, :page_number,
-                     CAST(:embedding AS vector), NOW())
-                """
-            ),
-            {
-                "id": str(uuid.uuid4()),
-                "document_id": str(doc_id),
-                "chunk_index": chunk.chunk_index,
-                "content": chunk.content,
-                "token_count": chunk.token_count,
-                "page_number": chunk.page_number,
-                "embedding": str(embedding),
-            },
-        )
+    """Insert all chunks in one database round trip."""
+    if len(chunks) != len(embeddings):
+        raise ValueError("Each chunk must have exactly one embedding.")
+
+    statement = text(
+        """
+        INSERT INTO chunks
+            (id, document_id, chunk_index, content, token_count, page_number, embedding, created_at)
+        VALUES
+            (:id, :document_id, :chunk_index, :content, :token_count, :page_number,
+             CAST(:embedding AS vector), NOW())
+        """
+    )
+    values = [
+        {
+            "id": str(uuid.uuid4()),
+            "document_id": str(doc_id),
+            "chunk_index": chunk.chunk_index,
+            "content": chunk.content,
+            "token_count": chunk.token_count,
+            "page_number": chunk.page_number,
+            "embedding": str(embedding),
+        }
+        for chunk, embedding in zip(chunks, embeddings, strict=True)
+    ]
+    if values:
+        await db.execute(statement, values)
     await db.commit()
 
 
@@ -98,30 +104,53 @@ async def search_similar_chunks(
     db: AsyncSession,
     *,
     query_embedding: list[float],
+    query: str,
     top_k: int,
+    document_ids: list[uuid.UUID] | None = None,
+    file_types: list[str] | None = None,
+    collection_name: str | None = None,
 ) -> list[dict]:
-    """Return top-k chunks ordered by cosine similarity (ascending distance)."""
+    """Hybrid vector + full-text retrieval combined with reciprocal-rank fusion."""
+    filters = ["d.status = 'ready'", "c.embedding IS NOT NULL"]
+    params: dict = {"embedding": str(query_embedding), "top_k": top_k, "candidate_k": top_k * 4}
+    if document_ids:
+        filters.append("c.document_id = ANY(CAST(:document_ids AS uuid[]))")
+        params["document_ids"] = [str(doc_id) for doc_id in document_ids]
+    if file_types:
+        filters.append("d.file_type = ANY(CAST(:file_types AS text[]))")
+        params["file_types"] = file_types
+    if collection_name:
+        filters.append("d.collection_name = :collection_name")
+        params["collection_name"] = collection_name
+    where_clause = " AND ".join(filters)
     result = await db.execute(
         text(
-            """
-            SELECT
-                c.id,
-                c.document_id,
-                c.chunk_index,
-                c.content,
-                c.page_number,
-                c.token_count,
-                (c.embedding <=> CAST(:embedding AS vector)) AS distance,
-                d.filename
-            FROM chunks c
-            JOIN documents d ON d.id = c.document_id
-            WHERE d.status = 'ready'
-              AND c.embedding IS NOT NULL
-            ORDER BY c.embedding <=> CAST(:embedding AS vector)
-            LIMIT :top_k
+            f"""
+            WITH semantic AS (
+                SELECT c.id, row_number() OVER (ORDER BY c.embedding <=> CAST(:embedding AS vector)) AS semantic_rank
+                FROM chunks c JOIN documents d ON d.id = c.document_id
+                WHERE {where_clause}
+                ORDER BY c.embedding <=> CAST(:embedding AS vector) LIMIT :candidate_k
+            ), lexical AS (
+                SELECT c.id, row_number() OVER (ORDER BY ts_rank_cd(to_tsvector('english', c.content), websearch_to_tsquery('english', :query)) DESC) AS lexical_rank
+                FROM chunks c JOIN documents d ON d.id = c.document_id
+                WHERE {where_clause}
+                  AND to_tsvector('english', c.content) @@ websearch_to_tsquery('english', :query)
+                ORDER BY ts_rank_cd(to_tsvector('english', c.content), websearch_to_tsquery('english', :query)) DESC LIMIT :candidate_k
+            ), candidates AS (
+                SELECT COALESCE(s.id, l.id) AS id,
+                  COALESCE(1.0 / (60 + s.semantic_rank), 0) + COALESCE(1.0 / (60 + l.lexical_rank), 0) AS rrf_score,
+                  s.semantic_rank, l.lexical_rank
+                FROM semantic s FULL OUTER JOIN lexical l ON s.id = l.id
+            )
+            SELECT c.id, c.document_id, c.chunk_index, c.content, c.page_number, c.token_count,
+                (c.embedding <=> CAST(:embedding AS vector)) AS distance, d.filename, d.collection_name,
+                candidates.rrf_score, candidates.semantic_rank, candidates.lexical_rank
+            FROM candidates JOIN chunks c ON c.id = candidates.id JOIN documents d ON d.id = c.document_id
+            ORDER BY candidates.rrf_score DESC LIMIT :top_k
             """
         ),
-        {"embedding": str(query_embedding), "top_k": top_k},
+        {**params, "query": query},
     )
     rows = result.mappings().all()
     return [dict(row) for row in rows]
@@ -131,7 +160,7 @@ async def get_all_documents(db: AsyncSession) -> list[dict]:
     result = await db.execute(
         text(
             """
-            SELECT id, filename, file_type, file_size, chunk_count, status, error_msg,
+            SELECT id, filename, file_type, file_size, collection_name, chunk_count, status, error_msg,
                    created_at, updated_at
             FROM documents
             ORDER BY created_at DESC

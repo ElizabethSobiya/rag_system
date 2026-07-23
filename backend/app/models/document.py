@@ -18,6 +18,7 @@ class Document(Base):
     filename: Mapped[str] = mapped_column(Text, nullable=False)
     file_type: Mapped[str] = mapped_column(Text, nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    collection_name: Mapped[str] = mapped_column(Text, nullable=False, default="General")
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="processing")
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)

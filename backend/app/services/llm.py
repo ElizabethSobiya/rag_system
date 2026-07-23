@@ -59,3 +59,27 @@ async def generate_answer(query: str, chunks: list[dict]) -> dict:
         )
 
     return {"answer": answer_text, "citations": citations}
+
+
+async def generate_answer_stream(query: str, chunks: list[dict]):
+    """Yield answer text tokens, then the same citation payload used by the JSON API."""
+    context = _build_context_block(chunks)
+    stream = await _client.chat.completions.create(
+        model=settings.chat_model,
+        temperature=settings.chat_temperature,
+        stream=True,
+        messages=[
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": f"Context:\n\n{context}\n\n---\n\nQuestion: {query}"},
+        ],
+    )
+    answer = ""
+    async for event in stream:
+        token = event.choices[0].delta.content or ""
+        answer += token
+        if token:
+            yield {"type": "delta", "text": token}
+    citations = []
+    for i, chunk in enumerate(chunks, start=1):
+        citations.append({"index": i, "filename": chunk["filename"], "page_number": chunk.get("page_number"), "excerpt": chunk["content"][:300], "similarity": round(1 - float(chunk["distance"]), 4), "referenced": f"[{i}]" in answer})
+    yield {"type": "complete", "answer": answer, "citations": citations}

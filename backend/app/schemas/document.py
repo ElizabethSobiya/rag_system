@@ -9,6 +9,7 @@ class DocumentResponse(BaseModel):
     filename: str
     file_type: str
     file_size: int
+    collection_name: str
     chunk_count: int
     status: str
     error_msg: str | None
