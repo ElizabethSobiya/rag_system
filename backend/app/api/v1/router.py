@@ -1,3 +1,5 @@
+"""Version 1 API route aggregation."""
+
 from fastapi import APIRouter
 
 from app.api.v1.documents import router as documents_router
