@@ -50,4 +50,35 @@ Use this only when developing the backend or frontend directly.
 
 #### Backend
 
-```ba
+```bash
+cd backend
+/opt/homebrew/opt/python@3.12/bin/python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --reload --reload-exclude '.venv/*'
+```
+
+The backend loads the repository `.env` automatically. Ensure Docker is running
+the database first and apply the idempotent schema job:
+
+```bash
+docker compose up -d db
+docker compose up schema
+```
+
+#### Frontend
+
+```bash
+cd frontend
+yarn install --frozen-lockfile
+yarn dev
+```
+
+The app runs at http://localhost:5173. Use Yarn for this project; its committed
+`yarn.lock` guarantees the dependency versions used by the app. Node.js 20 or
+later is recommended.
+
+## Environment variables
+
+See [.env.example](.env.example). **Never commit your real `.env`** — it is
+gitignored.
