@@ -34,9 +34,15 @@ export default function App() {
   const loadDocuments = useCallback(async () => {
     try {
       const response = await fetch(`${API}/api/v1/documents/`)
-      if (!response.ok) throw new Error('Document request failed.')
-      setDocuments(await response.json())
-    } catch { setError('Cannot reach the API. Start the FastAPI backend to use the workspace.') }
+      if (response.ok) {
+        setDocuments(await response.json())
+        return
+      }
+      const body = await response.json().catch(() => null)
+      setError(body?.detail ?? `The API returned ${response.status}.`)
+    } catch {
+      setError('Cannot connect to the API at http://localhost:8000.')
+    }
   }, [])
 
   useEffect(() => { void loadDocuments() }, [loadDocuments])
