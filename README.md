@@ -66,6 +66,10 @@ docker compose up -d db
 docker compose up schema
 ```
 
+Retrieval results below `MIN_CHUNK_SIMILARITY` (default `0.25`) are excluded
+before answer generation. API callers can override this for an individual query
+with the optional `min_similarity` field (`0.0` to `1.0`).
+
 #### Frontend
 
 ```bash

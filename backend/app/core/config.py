@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     # Retrieval config
     top_k_chunks: int = 5
+    min_chunk_similarity: float = 0.25
 
     # CORS
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
