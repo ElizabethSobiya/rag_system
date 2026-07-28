@@ -16,6 +16,15 @@ from app.services.vector_store import search_similar_chunks
 router = APIRouter(prefix="/query", tags=["query"])
 
 
+def _filter_by_similarity(chunks: list[dict], min_similarity: float) -> list[dict]:
+    """Discard retrieval results that are too weak to safely ground an answer."""
+    return [
+        chunk
+        for chunk in chunks
+        if 1 - float(chunk["distance"]) >= min_similarity
+    ]
+
+
 async def _get_chunks(request: QueryRequest, db: AsyncSession) -> list[dict]:
     query_embedding = await embed_query(request.query)
     chunks = await search_similar_chunks(
@@ -32,7 +41,22 @@ async def _get_chunks(request: QueryRequest, db: AsyncSession) -> list[dict]:
             status_code=404,
             detail="No documents are ready for querying. Upload and process a document first.",
         )
-    return chunks
+
+    min_similarity = (
+        request.min_similarity
+        if request.min_similarity is not None
+        else settings.min_chunk_similarity
+    )
+    relevant_chunks = _filter_by_similarity(chunks, min_similarity)
+    if not relevant_chunks:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No sufficiently relevant context was found for this query "
+                f"(minimum similarity: {min_similarity:.2f})."
+            ),
+        )
+    return relevant_chunks
 
 
 def _evidence_metadata(chunks: list[dict]) -> tuple[float, str, list[dict]]:

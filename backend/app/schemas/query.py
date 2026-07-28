@@ -9,6 +9,7 @@ class QueryRequest(BaseModel):
     document_ids: list[uuid.UUID] = Field(default_factory=list)
     file_types: list[str] = Field(default_factory=list)
     collection_name: str | None = Field(default=None, max_length=120)
+    min_similarity: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class Citation(BaseModel):
