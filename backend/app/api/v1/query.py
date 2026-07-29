@@ -25,13 +25,37 @@ def _filter_by_similarity(chunks: list[dict], min_similarity: float) -> list[dic
     ]
 
 
+def _select_diverse_chunks(
+    chunks: list[dict], *, top_k: int, max_per_document: int
+) -> list[dict]:
+    """Prefer source diversity, then backfill when too few documents are available."""
+    selected: list[dict] = []
+    skipped: list[dict] = []
+    per_document: dict[str, int] = {}
+
+    for chunk in chunks:
+        document_id = str(chunk["document_id"])
+        count = per_document.get(document_id, 0)
+        if count < max_per_document:
+            selected.append(chunk)
+            per_document[document_id] = count + 1
+        else:
+            skipped.append(chunk)
+
+    # Do not return fewer results merely because the corpus contains one source.
+    selected.extend(skipped[: max(0, top_k - len(selected))])
+    return selected[:top_k]
+
+
 async def _get_chunks(request: QueryRequest, db: AsyncSession) -> list[dict]:
     query_embedding = await embed_query(request.query)
+    top_k = request.top_k or settings.top_k_chunks
     chunks = await search_similar_chunks(
         db,
         query_embedding=query_embedding,
         query=request.query,
-        top_k=request.top_k or settings.top_k_chunks,
+        # Retrieve extra candidates so the diversity pass has alternatives.
+        top_k=top_k * 2,
         document_ids=request.document_ids,
         file_types=request.file_types,
         collection_name=request.collection_name,
@@ -56,7 +80,16 @@ async def _get_chunks(request: QueryRequest, db: AsyncSession) -> list[dict]:
                 f"(minimum similarity: {min_similarity:.2f})."
             ),
         )
-    return relevant_chunks
+    max_per_document = (
+        request.max_chunks_per_document
+        if request.max_chunks_per_document is not None
+        else settings.max_chunks_per_document
+    )
+    return _select_diverse_chunks(
+        relevant_chunks,
+        top_k=top_k,
+        max_per_document=max_per_document,
+    )
 
 
 def _evidence_metadata(chunks: list[dict]) -> tuple[float, str, list[dict]]:

@@ -10,6 +10,7 @@ class QueryRequest(BaseModel):
     file_types: list[str] = Field(default_factory=list)
     collection_name: str | None = Field(default=None, max_length=120)
     min_similarity: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_chunks_per_document: int | None = Field(default=None, ge=1, le=20)
 
 
 class Citation(BaseModel):
