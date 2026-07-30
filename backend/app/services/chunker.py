@@ -26,8 +26,15 @@ def chunk_pages(
     Given a list of (text, page_number) tuples, tokenize everything, apply a
     sliding window, and return ChunkData objects with majority-vote page assignment.
     """
-    chunk_size = chunk_size or settings.chunk_size_tokens
-    overlap = overlap or settings.chunk_overlap_tokens
+    chunk_size = settings.chunk_size_tokens if chunk_size is None else chunk_size
+    overlap = settings.chunk_overlap_tokens if overlap is None else overlap
+
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be greater than zero")
+    if overlap < 0:
+        raise ValueError("overlap cannot be negative")
+    if overlap >= chunk_size:
+        raise ValueError("overlap must be smaller than chunk_size")
 
     # Build a flat token list paired with page numbers
     all_tokens: list[int] = []
