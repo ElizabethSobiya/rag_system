@@ -35,4 +35,8 @@ CREATE INDEX IF NOT EXISTS chunks_embedding_cosine_idx ON chunks
 CREATE INDEX IF NOT EXISTS chunks_content_fts_idx ON chunks
     USING GIN (to_tsvector('english', content));
 
+CREATE INDEX IF NOT EXISTS chunks_document_id_idx ON chunks (document_id);
+
 CREATE INDEX IF NOT EXISTS documents_collection_idx ON documents (collection_name);
+
+CREATE INDEX IF NOT EXISTS documents_created_at_idx ON documents (created_at DESC);

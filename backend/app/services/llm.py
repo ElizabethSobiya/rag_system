@@ -73,12 +73,13 @@ async def generate_answer_stream(query: str, chunks: list[dict]):
             {"role": "user", "content": f"Context:\n\n{context}\n\n---\n\nQuestion: {query}"},
         ],
     )
-    answer = ""
+    answer_parts: list[str] = []
     async for event in stream:
         token = event.choices[0].delta.content or ""
-        answer += token
         if token:
+            answer_parts.append(token)
             yield {"type": "delta", "text": token}
+    answer = "".join(answer_parts)
     citations = []
     for i, chunk in enumerate(chunks, start=1):
         citations.append({"index": i, "filename": chunk["filename"], "page_number": chunk.get("page_number"), "excerpt": chunk["content"][:300], "similarity": round(1 - float(chunk["distance"]), 4), "referenced": f"[{i}]" in answer})
