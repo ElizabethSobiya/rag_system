@@ -1,4 +1,5 @@
 """Tiktoken-based sliding-window chunker with page number tracking."""
+from bisect import bisect_right
 from collections import Counter
 from dataclasses import dataclass
 
@@ -36,17 +37,33 @@ def chunk_pages(
     if overlap >= chunk_size:
         raise ValueError("overlap must be smaller than chunk_size")
 
-    # Build a flat token list paired with page numbers
+    # Build a flat token list and run-length page boundaries for efficient lookup
     all_tokens: list[int] = []
-    token_pages: list[int] = []  # page_number for each token position
+    # Store cumulative token boundaries and corresponding page numbers
+    page_boundaries: list[int] = []  # cumulative token count at end of each page
+    page_numbers: list[int] = []     # page number for each boundary
 
     for text, page_num in pages:
         tokens = _ENCODING.encode(text)
         all_tokens.extend(tokens)
-        token_pages.extend([page_num] * len(tokens))
+        page_boundaries.append(len(all_tokens))
+        page_numbers.append(page_num)
 
     if not all_tokens:
         return []
+
+    def _majority_page(start: int, end: int) -> int:
+        """Find majority page number for token range [start, end) using bisect."""
+        counts: Counter[int] = Counter()
+        pos = start
+        # Find the first boundary that covers tokens starting at 'pos'
+        boundary_idx = bisect_right(page_boundaries, pos)
+        while pos < end and boundary_idx < len(page_boundaries):
+            segment_end = min(page_boundaries[boundary_idx], end)
+            counts[page_numbers[boundary_idx]] += segment_end - pos
+            pos = segment_end
+            boundary_idx += 1
+        return counts.most_common(1)[0][0]
 
     chunks: list[ChunkData] = []
     start = 0
@@ -55,11 +72,8 @@ def chunk_pages(
     while start < len(all_tokens):
         end = min(start + chunk_size, len(all_tokens))
         chunk_tokens = all_tokens[start:end]
-        chunk_page_nums = token_pages[start:end]
 
-        # Majority-vote page number
-        page_counter = Counter(chunk_page_nums)
-        majority_page = page_counter.most_common(1)[0][0]
+        majority_page = _majority_page(start, end)
 
         content = _ENCODING.decode(chunk_tokens)
 
