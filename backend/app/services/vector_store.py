@@ -15,6 +15,7 @@ async def insert_document(
     file_type: str,
     file_size: int,
     collection_name: str = "General",
+    auto_commit: bool = True,
 ) -> None:
     await db.execute(
         text(
@@ -31,7 +32,8 @@ async def insert_document(
             "collection_name": collection_name,
         },
     )
-    await db.commit()
+    if auto_commit:
+        await db.commit()
 
 
 async def insert_chunks(
@@ -40,6 +42,7 @@ async def insert_chunks(
     doc_id: uuid.UUID,
     chunks: list[ChunkData],
     embeddings: list[list[float]],
+    auto_commit: bool = True,
 ) -> None:
     """Insert all chunks in one database round trip."""
     if len(chunks) != len(embeddings):
@@ -62,13 +65,14 @@ async def insert_chunks(
             "content": chunk.content,
             "token_count": chunk.token_count,
             "page_number": chunk.page_number,
-            "embedding": str(embedding),
+            "embedding": "[" + ",".join(f"{v:.8f}" for v in embedding) + "]",
         }
         for chunk, embedding in zip(chunks, embeddings, strict=True)
     ]
     if values:
         await db.execute(statement, values)
-    await db.commit()
+    if auto_commit:
+        await db.commit()
 
 
 async def update_document_status(
@@ -78,6 +82,7 @@ async def update_document_status(
     status: str,
     chunk_count: int = 0,
     error_msg: str | None = None,
+    auto_commit: bool = True,
 ) -> None:
     await db.execute(
         text(
@@ -97,7 +102,8 @@ async def update_document_status(
             "error_msg": error_msg,
         },
     )
-    await db.commit()
+    if auto_commit:
+        await db.commit()
 
 
 async def search_similar_chunks(
@@ -132,11 +138,15 @@ async def search_similar_chunks(
                 WHERE {where_clause}
                 ORDER BY c.embedding <=> CAST(:embedding AS vector) LIMIT :candidate_k
             ), lexical AS (
-                SELECT c.id, row_number() OVER (ORDER BY ts_rank_cd(to_tsvector('english', c.content), websearch_to_tsquery('english', :query)) DESC) AS lexical_rank
-                FROM chunks c JOIN documents d ON d.id = c.document_id
-                WHERE {where_clause}
-                  AND to_tsvector('english', c.content) @@ websearch_to_tsquery('english', :query)
-                ORDER BY ts_rank_cd(to_tsvector('english', c.content), websearch_to_tsquery('english', :query)) DESC LIMIT :candidate_k
+                SELECT id, row_number() OVER (ORDER BY rank DESC) AS lexical_rank
+                FROM (
+                    SELECT c.id,
+                           ts_rank_cd(to_tsvector('english', c.content), websearch_to_tsquery('english', :query)) AS rank
+                    FROM chunks c JOIN documents d ON d.id = c.document_id
+                    WHERE {where_clause}
+                      AND to_tsvector('english', c.content) @@ websearch_to_tsquery('english', :query)
+                ) sub
+                ORDER BY rank DESC LIMIT :candidate_k
             ), candidates AS (
                 SELECT COALESCE(s.id, l.id) AS id,
                   COALESCE(1.0 / (60 + s.semantic_rank), 0) + COALESCE(1.0 / (60 + l.lexical_rank), 0) AS rrf_score,
@@ -156,7 +166,12 @@ async def search_similar_chunks(
     return [dict(row) for row in rows]
 
 
-async def get_all_documents(db: AsyncSession) -> list[dict]:
+async def get_all_documents(
+    db: AsyncSession,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict]:
     result = await db.execute(
         text(
             """
@@ -164,8 +179,10 @@ async def get_all_documents(db: AsyncSession) -> list[dict]:
                    created_at, updated_at
             FROM documents
             ORDER BY created_at DESC
+            LIMIT :limit OFFSET :offset
             """
-        )
+        ),
+        {"limit": limit, "offset": offset},
     )
     rows = result.mappings().all()
     return [dict(row) for row in rows]

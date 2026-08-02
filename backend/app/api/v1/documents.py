@@ -56,13 +56,15 @@ async def _process_document(
             texts = [c.content for c in chunks]
             embeddings = await embed_texts(texts)
 
-            await insert_chunks(db, doc_id=doc_id, chunks=chunks, embeddings=embeddings)
+            await insert_chunks(db, doc_id=doc_id, chunks=chunks, embeddings=embeddings, auto_commit=False)
             await update_document_status(
                 db,
                 doc_id=doc_id,
                 status="ready",
                 chunk_count=len(chunks),
+                auto_commit=False,
             )
+            await db.commit()
         except Exception as exc:
             await update_document_status(
                 db,
@@ -117,8 +119,12 @@ async def upload_document(
 
 
 @router.get("/", response_model=list[DocumentResponse])
-async def list_documents(db: Annotated[AsyncSession, Depends(get_db)]):
-    rows = await get_all_documents(db)
+async def list_documents(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: int = 100,
+    offset: int = 0,
+):
+    rows = await get_all_documents(db, limit=min(limit, 500), offset=offset)
     return [DocumentResponse(**row) for row in rows]
 
 
