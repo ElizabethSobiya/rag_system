@@ -63,6 +63,8 @@ def chunk_pages(
             counts[page_numbers[boundary_idx]] += segment_end - pos
             pos = segment_end
             boundary_idx += 1
+        if not counts:
+            return page_numbers[bisect_right(page_boundaries, start)]
         return counts.most_common(1)[0][0]
 
     chunks: list[ChunkData] = []
