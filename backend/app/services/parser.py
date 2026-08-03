@@ -10,13 +10,15 @@ from docx import Document
 
 def parse_pdf(file_bytes: bytes) -> list[tuple[str, int]]:
     doc = fitz.open(stream=file_bytes, filetype="pdf")
-    pages = []
-    for page_num, page in enumerate(doc, start=1):
-        text = page.get_text("text")
-        if text.strip():
-            pages.append((text, page_num))
-    doc.close()
-    return pages
+    try:
+        pages = []
+        for page_num, page in enumerate(doc, start=1):
+            text = page.get_text("text")
+            if text.strip():
+                pages.append((text, page_num))
+        return pages
+    finally:
+        doc.close()
 
 
 def parse_docx(file_bytes: bytes) -> list[tuple[str, int]]:

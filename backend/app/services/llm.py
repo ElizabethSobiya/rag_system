@@ -41,6 +41,8 @@ async def generate_answer(query: str, chunks: list[dict]) -> dict:
         ],
     )
 
+    if not response.choices:
+        raise RuntimeError("LLM returned empty response")
     answer_text = response.choices[0].message.content or ""
 
     citations = []
@@ -74,13 +76,26 @@ async def generate_answer_stream(query: str, chunks: list[dict]):
         ],
     )
     answer_parts: list[str] = []
-    async for event in stream:
-        token = event.choices[0].delta.content or ""
-        if token:
-            answer_parts.append(token)
-            yield {"type": "delta", "text": token}
+    try:
+        async for event in stream:
+            if not event.choices:
+                continue
+            token = event.choices[0].delta.content or ""
+            if token:
+                answer_parts.append(token)
+                yield {"type": "delta", "text": token}
+    except Exception as exc:
+        yield {"type": "error", "error": str(exc)}
+        return
     answer = "".join(answer_parts)
     citations = []
     for i, chunk in enumerate(chunks, start=1):
-        citations.append({"index": i, "filename": chunk["filename"], "page_number": chunk.get("page_number"), "excerpt": chunk["content"][:300], "similarity": round(1 - float(chunk["distance"]), 4), "referenced": f"[{i}]" in answer})
+        citations.append({
+            "index": i,
+            "filename": chunk["filename"],
+            "page_number": chunk.get("page_number"),
+            "excerpt": chunk["content"][:300],
+            "similarity": round(1 - float(chunk["distance"]), 4),
+            "referenced": f"[{i}]" in answer,
+        })
     yield {"type": "complete", "answer": answer, "citations": citations}
