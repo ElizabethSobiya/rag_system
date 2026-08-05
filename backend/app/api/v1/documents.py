@@ -64,6 +64,7 @@ async def _process_document(
                 chunk_count=len(chunks),
             )
         except Exception as exc:
+            await db.rollback()
             await update_document_status(
                 db,
                 doc_id=doc_id,
