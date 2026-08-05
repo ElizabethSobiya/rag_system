@@ -79,6 +79,7 @@ async def _process_document(
             )
             await db.commit()
         except Exception as exc:
+            await db.rollback()
             await update_document_status(
                 db,
                 doc_id=doc_id,

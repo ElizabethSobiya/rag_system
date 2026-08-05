@@ -81,7 +81,7 @@ export default function App() {
       const body = await response.json().catch(() => null)
       setError(body?.detail ?? `The API returned ${response.status}.`)
     } catch {
-      setError('Cannot connect to the API at http://localhost:8000.')
+      setError(`Cannot connect to the API at ${API}.`)
     }
   }, [])
 
@@ -120,9 +120,11 @@ export default function App() {
   }, [])
 
   const removeDocument = useCallback(async (id: string) => {
-    const response = await fetch(`${API}/api/v1/documents/${id}`, { method: 'DELETE' })
-    if (!response.ok) { setError('Unable to delete this document.'); return }
-    setSelectedIds(ids => ids.filter(item => item !== id)); void loadDocuments()
+    try {
+      const response = await fetch(`${API}/api/v1/documents/${id}`, { method: 'DELETE' })
+      if (!response.ok) { setError('Unable to delete this document.'); return }
+      setSelectedIds(ids => ids.filter(item => item !== id)); void loadDocuments()
+    } catch { setError('Network error while deleting document.') }
   }, [loadDocuments])
 
   const handleCitationClick = useCallback((c: Citation) => setActiveCitation(c), [])
@@ -151,7 +153,7 @@ export default function App() {
       while (true) {
         const { value, done } = await reader.read(); if (done) break
         buffer += decoder.decode(value, { stream: true }); const events = buffer.split('\n\n'); buffer = events.pop() ?? ''
-        events.forEach(raw => { const line = raw.split('\n').find(item => item.startsWith('data: ')); if (!line) return; const item = JSON.parse(line.slice(6)); if (item.type === 'delta') { fullAnswer += item.text; scheduleAnswerRender() } else if (item.type === 'complete') { if (streamRenderFrame.current !== null) { cancelAnimationFrame(streamRenderFrame.current); streamRenderFrame.current = null }; updateAnswer({ answer: item.answer, citations: item.citations, confidence: item.confidence, evidence_status: item.evidence_status, retrieval_debug: item.retrieval_debug }) } })
+        events.forEach(raw => { const line = raw.split('\n').find(item => item.startsWith('data: ')); if (!line) return; let item; try { item = JSON.parse(line.slice(6)) } catch { return }; if (item.type === 'delta') { fullAnswer += item.text; scheduleAnswerRender() } else if (item.type === 'complete') { if (streamRenderFrame.current !== null) { cancelAnimationFrame(streamRenderFrame.current); streamRenderFrame.current = null }; updateAnswer({ answer: item.answer, citations: item.citations, confidence: item.confidence, evidence_status: item.evidence_status, retrieval_debug: item.retrieval_debug }) } })
       }
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return
@@ -183,6 +185,6 @@ export default function App() {
       <form className="composer" onSubmit={ask}><textarea value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ask a question about your evidence…" rows={2}/><button type="submit" disabled={loading || !question.trim()}>Send ↑</button><small>Answers cite supplied evidence only.</small></form>
       {error && <p className="error">{error}</p>}
     </section>
-    {activeCitation && <div className="modal-backdrop" onClick={closeCitation}><aside className="citation-modal" onClick={e => e.stopPropagation()}><button onClick={closeCitation}>×</button><p className="eyebrow">SOURCE EVIDENCE</p><h3>{activeCitation.filename}{activeCitation.page_number ? ` · page ${activeCitation.page_number}` : ''}</h3><p>{activeCitation.excerpt}</p><footer>Semantic similarity: {Math.round(activeCitation.similarity * 100)}%</footer></aside></div>}
+    {activeCitation && <div className="modal-backdrop" onClick={() => setActiveCitation(null)}><aside className="citation-modal" onClick={e => e.stopPropagation()}><button onClick={() => setActiveCitation(null)}>×</button><p className="eyebrow">SOURCE EVIDENCE</p><h3>{activeCitation.filename}{activeCitation.page_number ? ` · page ${activeCitation.page_number}` : ''}</h3><p>{activeCitation.excerpt}</p><footer>Semantic similarity: {Math.round(activeCitation.similarity * 100)}%</footer></aside></div>}
   </main>
 }
