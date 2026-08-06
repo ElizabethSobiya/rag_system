@@ -1,9 +1,15 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Supports `docker compose` and local commands launched from either the
+        # repository root or backend/.
+        env_file=(PROJECT_ROOT / ".env", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -23,6 +29,8 @@ class Settings(BaseSettings):
 
     # Retrieval config
     top_k_chunks: int = 5
+    min_chunk_similarity: float = 0.25
+    max_chunks_per_document: int = 2
 
     # CORS
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]

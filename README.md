@@ -18,7 +18,7 @@ retrieved chunks.
 .
 ├── backend/            # FastAPI app (API, services, models)
 ├── frontend/           # React + Vite app
-├── docker-compose.yml  # PostgreSQL + pgvector
+├── docker-compose.yml  # Complete local stack
 └── .env.example        # Copy to .env and fill in
 ```
 
@@ -31,32 +31,61 @@ cp .env.example .env
 # then edit .env and set OPENAI_API_KEY and any other values
 ```
 
-### 2. Start the database
+### 2. Start the complete application
 
 ```bash
-docker compose up -d
+docker compose up --build
 ```
 
-### 3. Run the backend
+Open http://localhost:5173. API documentation is available at
+http://localhost:8000/docs.
+
+This is the supported local setup. It uses a known Python version and installs
+backend dependencies in a container, so users do not need to install Python,
+Rust, PostgreSQL, or pgvector locally.
+
+### Optional: run services without Docker
+
+Use this only when developing the backend or frontend directly.
+
+#### Backend
 
 ```bash
 cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+/opt/homebrew/opt/python@3.12/bin/python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --reload --reload-exclude '.venv/*'
 ```
 
-The API runs at http://localhost:8000.
+The backend loads the repository `.env` automatically. Ensure Docker is running
+the database first and apply the idempotent schema job:
 
-### 4. Run the frontend
+```bash
+docker compose up -d db
+docker compose up schema
+```
+
+Retrieval results below `MIN_CHUNK_SIMILARITY` (default `0.25`) are excluded
+before answer generation. API callers can override this for an individual query
+with the optional `min_similarity` field (`0.0` to `1.0`).
+
+To keep answers grounded across multiple sources, retrieval prefers at most
+`MAX_CHUNKS_PER_DOCUMENT` chunks from each document (default `2`) before
+backfilling unused result slots. Queries can override this with the optional
+`max_chunks_per_document` field.
+
+#### Frontend
 
 ```bash
 cd frontend
-npm install
-npm run dev
+yarn install --frozen-lockfile
+yarn dev
 ```
 
-The app runs at http://localhost:5173.
+The app runs at http://localhost:5173. Use Yarn for this project; its committed
+`yarn.lock` guarantees the dependency versions used by the app. Node.js 20 or
+later is recommended.
 
 ## Environment variables
 
