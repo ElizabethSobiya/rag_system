@@ -39,4 +39,6 @@ async def embed_query(text: str) -> list[float]:
         model=settings.embedding_model,
         input=[text],
     )
+    if not response.data:
+        raise RuntimeError("Embedding API returned empty response")
     return response.data[0].embedding
