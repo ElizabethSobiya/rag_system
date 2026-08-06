@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent, FormEvent } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import './App.css'
 
 const API = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
@@ -52,7 +53,6 @@ const MessageItem = memo(function MessageItem({ message, showInspector, onCitati
 })
 
 export default function App() {
-  const [documents, setDocuments] = useState<Document[]>([])
   const [messages, setMessages] = useState<Message[]>([])
   const [question, setQuestion] = useState('')
   const [collection, setCollection] = useState('General')
@@ -60,54 +60,60 @@ export default function App() {
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
   const [dark, setDark] = useState(false)
   const [showInspector, setShowInspector] = useState(false)
   const [activeCitation, setActiveCitation] = useState<Citation | null>(null)
   const streamRenderFrame = useRef<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const queryClient = useQueryClient()
+  const documentsQuery = useQuery({
+    queryKey: ['documents'],
+    queryFn: async (): Promise<Document[]> => {
+      const response = await fetch(`${API}/api/v1/documents/`)
+      if (!response.ok) throw new Error('Document request failed.')
+      return response.json()
+    },
+    refetchInterval: query => query.state.data?.some(document => document.status === 'processing') ? 2500 : false,
+  })
+  const documents = documentsQuery.data ?? []
 
   const collections = useMemo(() => [...new Set(documents.map(d => d.collection_name))], [documents])
   const visibleDocs = useMemo(() => filterCollection === 'All collections' ? documents : documents.filter(d => d.collection_name === filterCollection), [documents, filterCollection])
 
-  const loadDocuments = useCallback(async () => {
-    try {
-      const response = await fetch(`${API}/api/v1/documents/`)
-      if (response.ok) {
-        setDocuments(await response.json())
-        return
-      }
-      const body = await response.json().catch(() => null)
-      setError(body?.detail ?? `The API returned ${response.status}.`)
-    } catch {
-      setError(`Cannot connect to the API at ${API}.`)
-    }
-  }, [])
-
-  useEffect(() => { void loadDocuments() }, [loadDocuments])
-  useEffect(() => {
-    const hasProcessing = documents.some(document => document.status === 'processing')
-    if (!hasProcessing) return
-    const timer = window.setTimeout(() => { void loadDocuments() }, 2500)
-    return () => window.clearTimeout(timer)
-  }, [documents, loadDocuments])
   useEffect(() => () => {
     if (streamRenderFrame.current) cancelAnimationFrame(streamRenderFrame.current)
     abortControllerRef.current?.abort()
   }, [])
 
+  const uploadMutation = useMutation({
+    mutationFn: async (files: File[]) => Promise.all(files.map(async file => {
+      const body = new FormData()
+      body.append('file', file)
+      body.append('collection_name', collection.trim() || 'General')
+      const response = await fetch(`${API}/api/v1/documents/upload`, { method: 'POST', body })
+      if (!response.ok) throw new Error((await response.json()).detail ?? `Could not upload ${file.name}`)
+    })),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['documents'] }),
+  })
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await fetch(`${API}/api/v1/documents/${id}`, { method: 'DELETE' })
+      if (!response.ok) throw new Error('Unable to delete this document.')
+      return id
+    },
+    onSuccess: id => {
+      setSelectedIds(ids => ids.filter(selectedId => selectedId !== id))
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
+    },
+  })
+
   async function uploadFiles(files: FileList | File[]) {
     if (!files.length) return
-    setUploading(true); setError('')
+    setError('')
     try {
-      await Promise.all(Array.from(files).map(async file => {
-        const body = new FormData(); body.append('file', file); body.append('collection_name', collection || 'General')
-        const response = await fetch(`${API}/api/v1/documents/upload`, { method: 'POST', body })
-        if (!response.ok) throw new Error((await response.json()).detail ?? `Could not upload ${file.name}`)
-      }))
-      await loadDocuments()
-    } catch (e) { setError(e instanceof Error ? e.message : 'Upload failed.') } finally { setUploading(false) }
+      await uploadMutation.mutateAsync(Array.from(files))
+    } catch (e) { setError(e instanceof Error ? e.message : 'Upload failed.') }
   }
 
   const onDrop = useCallback((event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setDragging(false); uploadFiles(event.dataTransfer.files) }, [collection])
@@ -120,12 +126,8 @@ export default function App() {
   }, [])
 
   const removeDocument = useCallback(async (id: string) => {
-    try {
-      const response = await fetch(`${API}/api/v1/documents/${id}`, { method: 'DELETE' })
-      if (!response.ok) { setError('Unable to delete this document.'); return }
-      setSelectedIds(ids => ids.filter(item => item !== id)); void loadDocuments()
-    } catch { setError('Network error while deleting document.') }
-  }, [loadDocuments])
+    try { await deleteMutation.mutateAsync(id) } catch (e) { setError(e instanceof Error ? e.message : 'Unable to delete this document.') }
+  }, [deleteMutation])
 
   const handleCitationClick = useCallback((c: Citation) => setActiveCitation(c), [])
   const closeCitation = useCallback(() => setActiveCitation(null), [])
@@ -169,10 +171,10 @@ export default function App() {
       <div className="sidebar-bottom"><button onClick={toggleDark}>{dark ? '☀ Light theme' : '◐ Dark theme'}</button><span>Grounded answers, inspectable evidence.</span></div>
     </aside>
     <section className="library">
-      <header><div><p className="eyebrow">KNOWLEDGE BASE</p><h1>Evidence library</h1></div><button className="refresh" onClick={loadDocuments}>↻ Refresh</button></header>
+      <header><div><p className="eyebrow">KNOWLEDGE BASE</p><h1>Evidence library</h1></div><button className="refresh" onClick={() => documentsQuery.refetch()}>↻ Refresh</button></header>
       <div className={`dropzone ${dragging ? 'dragging' : ''}`} onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave}>
         <input id="file-upload" type="file" multiple accept=".pdf,.docx,.html,.htm,.txt,.md" onChange={chooseFiles} />
-        <label htmlFor="file-upload"><strong>{uploading ? 'Uploading documents…' : 'Drop documents here'}</strong><span>or browse files · PDF, DOCX, HTML, MD, TXT · 25 MB max</span></label>
+        <label htmlFor="file-upload"><strong>{uploadMutation.isPending ? 'Uploading documents…' : 'Drop documents here'}</strong><span>or browse files · PDF, DOCX, HTML, MD, TXT · 25 MB max</span></label>
         <input aria-label="Collection name" value={collection} onChange={e => setCollection(e.target.value)} placeholder="Collection name" />
       </div>
       <div className="library-toolbar"><select value={filterCollection} onChange={e => setFilterCollection(e.target.value)}><option>All collections</option>{collections.map(name => <option key={name}>{name}</option>)}</select><span>{visibleDocs.length} documents</span></div>
@@ -183,8 +185,8 @@ export default function App() {
       <div className="messages">{messages.length === 0 && <div className="welcome"><span>✦</span><h3>Turn documents into defensible answers.</h3><p>Ask a question, open every source, and inspect how retrieval chose its evidence.</p><div className="suggestions"><button onClick={() => setQuestion('What are the main conclusions across these documents?')}>Summarize the conclusions</button><button onClick={() => setQuestion('Where do these documents disagree?')}>Find disagreements</button></div></div>}
       {messages.map(message => <MessageItem key={message.id} message={message} showInspector={showInspector} onCitationClick={handleCitationClick} />)}{loading && <article className="message assistant"><div className="avatar">◇</div><div className="typing"><i></i><i></i><i></i> Retrieving evidence…</div></article>}</div>
       <form className="composer" onSubmit={ask}><textarea value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ask a question about your evidence…" rows={2}/><button type="submit" disabled={loading || !question.trim()}>Send ↑</button><small>Answers cite supplied evidence only.</small></form>
-      {error && <p className="error">{error}</p>}
+      {(error || documentsQuery.isError) && <p className="error">{error || 'Cannot reach the API. Start the FastAPI backend to use the workspace.'}</p>}
     </section>
-    {activeCitation && <div className="modal-backdrop" onClick={() => setActiveCitation(null)}><aside className="citation-modal" onClick={e => e.stopPropagation()}><button onClick={() => setActiveCitation(null)}>×</button><p className="eyebrow">SOURCE EVIDENCE</p><h3>{activeCitation.filename}{activeCitation.page_number ? ` · page ${activeCitation.page_number}` : ''}</h3><p>{activeCitation.excerpt}</p><footer>Semantic similarity: {Math.round(activeCitation.similarity * 100)}%</footer></aside></div>}
+    {activeCitation && <div className="modal-backdrop" role="dialog" aria-label="Source evidence" onClick={closeCitation} onKeyDown={e => { if (e.key === 'Escape') closeCitation() }}><aside className="citation-modal" onClick={e => e.stopPropagation()}><button onClick={closeCitation}>×</button><p className="eyebrow">SOURCE EVIDENCE</p><h3>{activeCitation.filename}{activeCitation.page_number ? ` · page ${activeCitation.page_number}` : ''}</h3><p>{activeCitation.excerpt}</p><footer>Semantic similarity: {Math.round(activeCitation.similarity * 100)}%</footer></aside></div>}
   </main>
 }
