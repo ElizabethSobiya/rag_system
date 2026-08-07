@@ -12,6 +12,13 @@ type Message = { id: string; role: 'user' | 'assistant'; text: string; result?: 
 
 const fileIcon = (type: string) => type === 'pdf' ? 'PDF' : type === 'docx' ? 'DOC' : type.toUpperCase()
 const statusLabel: Record<string, string> = { strongly_supported: 'Strong evidence', partially_supported: 'Partial evidence', insufficient_evidence: 'Needs more evidence' }
+const ACCEPTED_EXTENSIONS = new Set(['pdf', 'docx', 'html', 'htm', 'txt', 'md'])
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 let messageIdCounter = 0
 function nextMessageId() { return `msg-${++messageIdCounter}` }
@@ -21,7 +28,7 @@ const DocumentItem = memo(function DocumentItem({ doc, selected, onToggle, onDel
     <article className="document">
       <input aria-label={`Select ${doc.filename}`} type="checkbox" checked={selected} onChange={() => onToggle(doc.id)}/>
       <span className="file-type">{fileIcon(doc.file_type)}</span>
-      <div><strong>{doc.filename}</strong><p>{doc.collection_name} · {doc.chunk_count} chunks</p>{doc.error_msg && <small>{doc.error_msg}</small>}</div>
+      <div><strong>{doc.filename}</strong><p>{doc.collection_name} · {formatFileSize(doc.file_size)} · {doc.chunk_count} chunks</p>{doc.error_msg && <small>{doc.error_msg}</small>}</div>
       <span className={`doc-status ${doc.status}`}>{doc.status}</span>
       <button className="delete" onClick={() => onDelete(doc.id)} aria-label={`Delete ${doc.filename}`}>×</button>
     </article>
@@ -110,9 +117,15 @@ export default function App() {
 
   async function uploadFiles(files: FileList | File[]) {
     if (!files.length) return
-    setError('')
+    const valid = Array.from(files).filter(f => {
+      const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
+      return ACCEPTED_EXTENSIONS.has(ext)
+    })
+    if (!valid.length) { setError(`Unsupported file type. Allowed: ${[...ACCEPTED_EXTENSIONS].join(', ').toUpperCase()}`); return }
+    if (valid.length < files.length) setError(`${files.length - valid.length} file(s) skipped — unsupported type.`)
+    else setError('')
     try {
-      await uploadMutation.mutateAsync(Array.from(files))
+      await uploadMutation.mutateAsync(valid)
     } catch (e) { setError(e instanceof Error ? e.message : 'Upload failed.') }
   }
 
@@ -174,7 +187,7 @@ export default function App() {
       <header><div><p className="eyebrow">KNOWLEDGE BASE</p><h1>Evidence library</h1></div><button className="refresh" onClick={() => documentsQuery.refetch()}>↻ Refresh</button></header>
       <div className={`dropzone ${dragging ? 'dragging' : ''}`} onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave}>
         <input id="file-upload" type="file" multiple accept=".pdf,.docx,.html,.htm,.txt,.md" onChange={chooseFiles} />
-        <label htmlFor="file-upload"><strong>{uploadMutation.isPending ? 'Uploading documents…' : 'Drop documents here'}</strong><span>or browse files · PDF, DOCX, HTML, MD, TXT · 25 MB max</span></label>
+        <label htmlFor="file-upload"><strong>{uploadMutation.isPending ? `Uploading ${(uploadMutation.variables?.length ?? 0)} file${(uploadMutation.variables?.length ?? 0) === 1 ? '' : 's'}…` : 'Drop documents here'}</strong><span>or browse files · PDF, DOCX, HTML, MD, TXT · 25 MB max</span></label>
         <input aria-label="Collection name" value={collection} onChange={e => setCollection(e.target.value)} placeholder="Collection name" />
       </div>
       <div className="library-toolbar"><select value={filterCollection} onChange={e => setFilterCollection(e.target.value)}><option>All collections</option>{collections.map(name => <option key={name}>{name}</option>)}</select><span>{visibleDocs.length} documents</span></div>
@@ -184,7 +197,7 @@ export default function App() {
       <header><div><p className="eyebrow">RESEARCH CONSOLE</p><h2>Ask your evidence</h2></div><span className="scope">{selectedIds.length ? `${selectedIds.length} selected sources` : filterCollection}</span></header>
       <div className="messages">{messages.length === 0 && <div className="welcome"><span>✦</span><h3>Turn documents into defensible answers.</h3><p>Ask a question, open every source, and inspect how retrieval chose its evidence.</p><div className="suggestions"><button onClick={() => setQuestion('What are the main conclusions across these documents?')}>Summarize the conclusions</button><button onClick={() => setQuestion('Where do these documents disagree?')}>Find disagreements</button></div></div>}
       {messages.map(message => <MessageItem key={message.id} message={message} showInspector={showInspector} onCitationClick={handleCitationClick} />)}{loading && <article className="message assistant"><div className="avatar">◇</div><div className="typing"><i></i><i></i><i></i> Retrieving evidence…</div></article>}</div>
-      <form className="composer" onSubmit={ask}><textarea value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ask a question about your evidence…" rows={2}/><button type="submit" disabled={loading || !question.trim()}>Send ↑</button><small>Answers cite supplied evidence only.</small></form>
+      <form className="composer" onSubmit={ask}><textarea value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(e) } }} placeholder="Ask a question about your evidence…" rows={2}/><button type="submit" disabled={loading || !question.trim()}>Send ↑</button><small>Press Enter to send · Shift + Enter for new line</small></form>
       {(error || documentsQuery.isError) && <p className="error">{error || 'Cannot reach the API. Start the FastAPI backend to use the workspace.'}</p>}
     </section>
     {activeCitation && <div className="modal-backdrop" role="dialog" aria-label="Source evidence" onClick={closeCitation} onKeyDown={e => { if (e.key === 'Escape') closeCitation() }}><aside className="citation-modal" onClick={e => e.stopPropagation()}><button onClick={closeCitation}>×</button><p className="eyebrow">SOURCE EVIDENCE</p><h3>{activeCitation.filename}{activeCitation.page_number ? ` · page ${activeCitation.page_number}` : ''}</h3><p>{activeCitation.excerpt}</p><footer>Semantic similarity: {Math.round(activeCitation.similarity * 100)}%</footer></aside></div>}
