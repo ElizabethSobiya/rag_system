@@ -9,6 +9,7 @@ type Document = { id: string; filename: string; file_type: string; file_size: nu
 type Citation = { index: number; filename: string; page_number?: number; excerpt: string; similarity: number; referenced: boolean }
 type Answer = { answer: string; citations: Citation[]; confidence: number; evidence_status: string; retrieval_debug: Array<{ filename: string; page_number?: number; similarity: number; semantic_rank?: number; lexical_rank?: number; fusion_score: number }> }
 type Message = { id: string; role: 'user' | 'assistant'; text: string; result?: Answer }
+type HistoryEntry = { id: string; query: string; answer: string; citations: Citation[]; confidence: number; evidence_status: string; collection_name: string | null; created_at: string }
 
 const fileIcon = (type: string) => type === 'pdf' ? 'PDF' : type === 'docx' ? 'DOC' : type.toUpperCase()
 const statusLabel: Record<string, string> = { strongly_supported: 'Strong evidence', partially_supported: 'Partial evidence', insufficient_evidence: 'Needs more evidence' }
@@ -70,6 +71,7 @@ export default function App() {
   const [error, setError] = useState('')
   const [dark, setDark] = useState(false)
   const [showInspector, setShowInspector] = useState(false)
+  const [activeView, setActiveView] = useState<'workspace' | 'history'>('workspace')
   const [activeCitation, setActiveCitation] = useState<Citation | null>(null)
   const streamRenderFrame = useRef<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -113,6 +115,22 @@ export default function App() {
       setSelectedIds(ids => ids.filter(selectedId => selectedId !== id))
       queryClient.invalidateQueries({ queryKey: ['documents'] })
     },
+  })
+
+  const historyQuery = useQuery({
+    queryKey: ['history'],
+    queryFn: async (): Promise<{ items: HistoryEntry[]; total: number }> => {
+      const res = await fetch(`${API}/api/v1/history/?limit=50`)
+      if (!res.ok) throw new Error('Failed to load history')
+      return res.json()
+    },
+  })
+  const deleteHistoryMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`${API}/api/v1/history/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete')
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['history'] }),
   })
 
   async function uploadFiles(files: FileList | File[]) {
@@ -173,25 +191,51 @@ export default function App() {
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return
       setError(e instanceof Error ? e.message : 'Request failed.')
-    } finally { setLoading(false) }
+    } finally { setLoading(false); queryClient.invalidateQueries({ queryKey: ['history'] }) }
+  }
+
+  function loadHistoryEntry(entry: HistoryEntry) {
+    const userMsg: Message = { id: nextMessageId(), role: 'user', text: entry.query }
+    const assistantMsg: Message = { id: nextMessageId(), role: 'assistant', text: entry.answer, result: { answer: entry.answer, citations: entry.citations, confidence: entry.confidence, evidence_status: entry.evidence_status, retrieval_debug: [] } }
+    setMessages([userMsg, assistantMsg])
+    setActiveView('workspace')
   }
 
   return <main className={dark ? 'app dark' : 'app'}>
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">◇</span><span>TraceRAG</span></div>
       <button className="new-chat" onClick={clearMessages}>＋ New investigation</button>
-      <nav><button className="nav-active">▣ Evidence workspace</button><button onClick={toggleInspector}>⌘ Retrieval lab</button></nav>
+      <nav><button className={activeView === 'workspace' ? 'nav-active' : ''} onClick={() => setActiveView('workspace')}>▣ Evidence workspace</button><button className={activeView === 'history' ? 'nav-active' : ''} onClick={() => setActiveView('history')}>⏱ Query history</button><button onClick={toggleInspector}>⌘ Retrieval lab</button></nav>
       <div className="sidebar-bottom"><button onClick={toggleDark}>{dark ? '☀ Light theme' : '◐ Dark theme'}</button><span>Grounded answers, inspectable evidence.</span></div>
     </aside>
     <section className="library">
-      <header><div><p className="eyebrow">KNOWLEDGE BASE</p><h1>Evidence library</h1></div><button className="refresh" onClick={() => documentsQuery.refetch()}>↻ Refresh</button></header>
-      <div className={`dropzone ${dragging ? 'dragging' : ''}`} onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave}>
-        <input id="file-upload" type="file" multiple accept=".pdf,.docx,.html,.htm,.txt,.md" onChange={chooseFiles} />
-        <label htmlFor="file-upload"><strong>{uploadMutation.isPending ? `Uploading ${(uploadMutation.variables?.length ?? 0)} file${(uploadMutation.variables?.length ?? 0) === 1 ? '' : 's'}…` : 'Drop documents here'}</strong><span>or browse files · PDF, DOCX, HTML, MD, TXT · 25 MB max</span></label>
-        <input aria-label="Collection name" value={collection} onChange={e => setCollection(e.target.value)} placeholder="Collection name" />
-      </div>
-      <div className="library-toolbar"><select value={filterCollection} onChange={e => setFilterCollection(e.target.value)}><option>All collections</option>{collections.map(name => <option key={name}>{name}</option>)}</select><span>{visibleDocs.length} documents</span></div>
-      <div className="documents">{visibleDocs.length === 0 ? <p className="empty">Add a source to begin investigating.</p> : visibleDocs.map(doc => <DocumentItem key={doc.id} doc={doc} selected={selectedIds.includes(doc.id)} onToggle={toggleDocSelection} onDelete={removeDocument} />)}</div>
+      {activeView === 'history' ? <>
+        <header><div><p className="eyebrow">SEARCH HISTORY</p><h1>Past queries</h1></div><button className="refresh" onClick={() => historyQuery.refetch()}>↻ Refresh</button></header>
+        <div className="history-list">
+          {historyQuery.isLoading && <p className="empty">Loading history…</p>}
+          {historyQuery.data && historyQuery.data.items.length === 0 && <p className="empty">No queries yet. Ask a question to get started.</p>}
+          {historyQuery.data?.items.map(entry => (
+            <div key={entry.id} className="history-item" onClick={() => loadHistoryEntry(entry)}>
+              <button className="delete" onClick={e => { e.stopPropagation(); deleteHistoryMutation.mutate(entry.id) }} aria-label="Delete history entry">×</button>
+              <strong>{entry.query.length > 80 ? entry.query.slice(0, 80) + '…' : entry.query}</strong>
+              <small>
+                <span className={`evidence-badge ${entry.evidence_status}`}>{Math.round(entry.confidence * 100)}%</span>
+                {' · '}{entry.collection_name ?? 'All collections'}
+                {' · '}{new Date(entry.created_at).toLocaleDateString()}
+              </small>
+            </div>
+          ))}
+        </div>
+      </> : <>
+        <header><div><p className="eyebrow">KNOWLEDGE BASE</p><h1>Evidence library</h1></div><button className="refresh" onClick={() => documentsQuery.refetch()}>↻ Refresh</button></header>
+        <div className={`dropzone ${dragging ? 'dragging' : ''}`} onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave}>
+          <input id="file-upload" type="file" multiple accept=".pdf,.docx,.html,.htm,.txt,.md" onChange={chooseFiles} />
+          <label htmlFor="file-upload"><strong>{uploadMutation.isPending ? `Uploading ${(uploadMutation.variables?.length ?? 0)} file${(uploadMutation.variables?.length ?? 0) === 1 ? '' : 's'}…` : 'Drop documents here'}</strong><span>or browse files · PDF, DOCX, HTML, MD, TXT · 25 MB max</span></label>
+          <input aria-label="Collection name" value={collection} onChange={e => setCollection(e.target.value)} placeholder="Collection name" />
+        </div>
+        <div className="library-toolbar"><select value={filterCollection} onChange={e => setFilterCollection(e.target.value)}><option>All collections</option>{collections.map(name => <option key={name}>{name}</option>)}</select><span>{visibleDocs.length} documents</span></div>
+        <div className="documents">{visibleDocs.length === 0 ? <p className="empty">Add a source to begin investigating.</p> : visibleDocs.map(doc => <DocumentItem key={doc.id} doc={doc} selected={selectedIds.includes(doc.id)} onToggle={toggleDocSelection} onDelete={removeDocument} />)}</div>
+      </>}
     </section>
     <section className="chat">
       <header><div><p className="eyebrow">RESEARCH CONSOLE</p><h2>Ask your evidence</h2></div><span className="scope">{selectedIds.length ? `${selectedIds.length} selected sources` : filterCollection}</span></header>

@@ -40,3 +40,17 @@ CREATE INDEX IF NOT EXISTS chunks_document_id_idx ON chunks (document_id);
 CREATE INDEX IF NOT EXISTS documents_collection_idx ON documents (collection_name);
 
 CREATE INDEX IF NOT EXISTS documents_created_at_idx ON documents (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS search_history (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    query           TEXT NOT NULL,
+    answer          TEXT NOT NULL,
+    citations       JSONB NOT NULL DEFAULT '[]',
+    confidence      DOUBLE PRECISION NOT NULL,
+    evidence_status TEXT NOT NULL,
+    collection_name TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS search_history_created_at_idx
+    ON search_history (created_at DESC);
