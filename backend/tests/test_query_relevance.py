@@ -11,6 +11,15 @@ from app.schemas.query import QueryRequest
 
 
 class QueryRelevanceTests(unittest.TestCase):
+    def test_rejects_whitespace_only_query(self):
+        with self.assertRaises(ValidationError):
+            QueryRequest(query="   \n\t  ")
+
+    def test_strips_surrounding_query_whitespace(self):
+        request = QueryRequest(query="  What changed?\n")
+
+        self.assertEqual(request.query, "What changed?")
+
     def test_filters_chunks_below_threshold_and_preserves_order(self):
         chunks = [
             {"id": "strong", "distance": 0.1},

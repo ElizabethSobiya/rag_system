@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from typing import Annotated
 
@@ -23,6 +24,16 @@ ALLOWED_EXTENSIONS = {".pdf", ".docx", ".html", ".htm", ".txt", ".md"}
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
+async def _read_upload(file: UploadFile) -> bytes:
+    """Read only enough bytes to validate the configured upload limit."""
+    file_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Files must be 25 MB or smaller.")
+    return file_bytes
+
+
 async def _process_document(
     doc_id: uuid.UUID,
     file_bytes: bytes,
@@ -33,7 +44,9 @@ async def _process_document(
 
     async with AsyncSessionLocal() as db:
         try:
-            pages = parse_document(file_bytes, filename)
+            # Parsing and tokenization are CPU-bound and would otherwise block
+            # the FastAPI event loop while a document is being ingested.
+            pages = await asyncio.to_thread(parse_document, file_bytes, filename)
             if not pages:
                 await update_document_status(
                     db,
@@ -43,7 +56,7 @@ async def _process_document(
                 )
                 return
 
-            chunks = chunk_pages(pages)
+            chunks = await asyncio.to_thread(chunk_pages, pages)
             if not chunks:
                 await update_document_status(
                     db,
@@ -56,13 +69,15 @@ async def _process_document(
             texts = [c.content for c in chunks]
             embeddings = await embed_texts(texts)
 
-            await insert_chunks(db, doc_id=doc_id, chunks=chunks, embeddings=embeddings)
+            await insert_chunks(db, doc_id=doc_id, chunks=chunks, embeddings=embeddings, auto_commit=False)
             await update_document_status(
                 db,
                 doc_id=doc_id,
                 status="ready",
                 chunk_count=len(chunks),
+                auto_commit=False,
             )
+            await db.commit()
         except Exception as exc:
             await db.rollback()
             await update_document_status(
@@ -89,11 +104,7 @@ async def upload_document(
             detail=f"Unsupported file type '{suffix}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
         )
 
-    file_bytes = await file.read()
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    if len(file_bytes) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="Files must be 25 MB or smaller.")
+    file_bytes = await _read_upload(file)
 
     doc_id = uuid.uuid4()
     await insert_document(
@@ -118,8 +129,12 @@ async def upload_document(
 
 
 @router.get("/", response_model=list[DocumentResponse])
-async def list_documents(db: Annotated[AsyncSession, Depends(get_db)]):
-    rows = await get_all_documents(db)
+async def list_documents(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: int = 100,
+    offset: int = 0,
+):
+    rows = await get_all_documents(db, limit=min(limit, 500), offset=offset)
     return [DocumentResponse(**row) for row in rows]
 
 
