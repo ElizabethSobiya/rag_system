@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Annotated
 
 from pydantic import BaseModel, Field, StringConstraints
@@ -33,3 +34,21 @@ class QueryResponse(BaseModel):
     confidence: float
     evidence_status: str
     retrieval_debug: list[dict]
+
+
+class SearchHistoryResponse(BaseModel):
+    id: uuid.UUID
+    query: str
+    answer: str
+    citations: list[Citation]
+    confidence: float
+    evidence_status: str
+    collection_name: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class SearchHistoryList(BaseModel):
+    items: list[SearchHistoryResponse]
+    total: int
