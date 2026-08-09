@@ -69,7 +69,12 @@ export default function App() {
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [dark, setDark] = useState(false)
+  const [dark, setDark] = useState(() => {
+    const stored = localStorage.getItem('theme')
+    if (stored) return stored === 'dark'
+    return window.matchMedia('(prefers-color-scheme: dark)').matches
+  })
+  useEffect(() => { localStorage.setItem('theme', dark ? 'dark' : 'light') }, [dark])
   const [showInspector, setShowInspector] = useState(false)
   const [activeView, setActiveView] = useState<'workspace' | 'history'>('workspace')
   const [activeCitation, setActiveCitation] = useState<Citation | null>(null)
