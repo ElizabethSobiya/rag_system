@@ -13,7 +13,7 @@ type HistoryEntry = { id: string; query: string; answer: string; citations: Cita
 
 const fileIcon = (type: string) => type === 'pdf' ? 'PDF' : type === 'docx' ? 'DOC' : type.toUpperCase()
 const statusLabel: Record<string, string> = { strongly_supported: 'Strong evidence', partially_supported: 'Partial evidence', insufficient_evidence: 'Needs more evidence' }
-const ACCEPTED_EXTENSIONS = new Set(['pdf', 'docx', 'html', 'htm', 'txt', 'md'])
+const ACCEPTED_EXTENSIONS = new Set(['pdf', 'docx', 'html', 'htm', 'txt', 'md', 'csv', 'xlsx'])
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -234,8 +234,8 @@ export default function App() {
       </> : <>
         <header><div><p className="eyebrow">KNOWLEDGE BASE</p><h1>Evidence library</h1></div><button className="refresh" onClick={() => documentsQuery.refetch()}>↻ Refresh</button></header>
         <div className={`dropzone ${dragging ? 'dragging' : ''}`} onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave}>
-          <input id="file-upload" type="file" multiple accept=".pdf,.docx,.html,.htm,.txt,.md" onChange={chooseFiles} />
-          <label htmlFor="file-upload"><strong>{uploadMutation.isPending ? `Uploading ${(uploadMutation.variables?.length ?? 0)} file${(uploadMutation.variables?.length ?? 0) === 1 ? '' : 's'}…` : 'Drop documents here'}</strong><span>or browse files · PDF, DOCX, HTML, MD, TXT · 25 MB max</span></label>
+          <input id="file-upload" type="file" multiple accept=".pdf,.docx,.html,.htm,.txt,.md,.csv,.xlsx" onChange={chooseFiles} />
+          <label htmlFor="file-upload"><strong>{uploadMutation.isPending ? `Uploading ${(uploadMutation.variables?.length ?? 0)} file${(uploadMutation.variables?.length ?? 0) === 1 ? '' : 's'}…` : 'Drop documents here'}</strong><span>or browse files · PDF, DOCX, HTML, MD, TXT, CSV, XLSX · 25 MB max</span></label>
           <input aria-label="Collection name" value={collection} onChange={e => setCollection(e.target.value)} placeholder="Collection name" />
         </div>
         <div className="library-toolbar"><select value={filterCollection} onChange={e => setFilterCollection(e.target.value)}><option>All collections</option>{collections.map(name => <option key={name}>{name}</option>)}</select><span>{visibleDocs.length} documents</span></div>

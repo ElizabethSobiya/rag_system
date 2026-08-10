@@ -20,7 +20,7 @@ from app.services.vector_store import (
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".html", ".htm", ".txt", ".md"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".html", ".htm", ".txt", ".md", ".csv", ".xlsx"}
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
