@@ -188,6 +188,38 @@ async def get_all_documents(
     return [dict(row) for row in rows]
 
 
+async def get_document_content(
+    db: AsyncSession,
+    *,
+    doc_id: uuid.UUID,
+) -> dict | None:
+    """Retrieve full document content by concatenating its chunks in order."""
+    doc_result = await db.execute(
+        text("SELECT id, filename, file_type, status FROM documents WHERE id = :id"),
+        {"id": str(doc_id)},
+    )
+    doc = doc_result.mappings().first()
+    if not doc:
+        return None
+
+    chunks_result = await db.execute(
+        text(
+            "SELECT content, chunk_index, page_number FROM chunks "
+            "WHERE document_id = :doc_id ORDER BY chunk_index ASC"
+        ),
+        {"doc_id": str(doc_id)},
+    )
+    rows = chunks_result.mappings().all()
+    return {
+        "id": doc["id"],
+        "filename": doc["filename"],
+        "file_type": doc["file_type"],
+        "status": doc["status"],
+        "chunks": [dict(r) for r in rows],
+        "content": "\n\n".join(r["content"] for r in rows),
+    }
+
+
 async def delete_document(db: AsyncSession, *, doc_id: uuid.UUID) -> bool:
     result = await db.execute(
         text("DELETE FROM documents WHERE id = :id"),

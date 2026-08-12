@@ -24,12 +24,12 @@ function formatFileSize(bytes: number): string {
 let messageIdCounter = 0
 function nextMessageId() { return `msg-${++messageIdCounter}` }
 
-const DocumentItem = memo(function DocumentItem({ doc, selected, onToggle, onDelete }: { doc: Document; selected: boolean; onToggle: (id: string) => void; onDelete: (id: string) => void }) {
+const DocumentItem = memo(function DocumentItem({ doc, selected, onToggle, onDelete, onPreview }: { doc: Document; selected: boolean; onToggle: (id: string) => void; onDelete: (id: string) => void; onPreview: (id: string) => void }) {
   return (
     <article className="document">
       <input aria-label={`Select ${doc.filename}`} type="checkbox" checked={selected} onChange={() => onToggle(doc.id)}/>
       <span className="file-type">{fileIcon(doc.file_type)}</span>
-      <div><strong>{doc.filename}</strong><p>{doc.collection_name} · {formatFileSize(doc.file_size)} · {doc.chunk_count} chunks</p>{doc.error_msg && <small>{doc.error_msg}</small>}</div>
+      <div><strong className="doc-preview-link" onClick={() => doc.status === 'ready' && onPreview(doc.id)} style={{ cursor: doc.status === 'ready' ? 'pointer' : 'default' }}>{doc.filename}</strong><p>{doc.collection_name} · {formatFileSize(doc.file_size)} · {doc.chunk_count} chunks</p>{doc.error_msg && <small>{doc.error_msg}</small>}</div>
       <span className={`doc-status ${doc.status}`}>{doc.status}</span>
       <button className="delete" onClick={() => onDelete(doc.id)} aria-label={`Delete ${doc.filename}`}>×</button>
     </article>
@@ -60,6 +60,26 @@ const MessageItem = memo(function MessageItem({ message, showInspector, onCitati
   )
 })
 
+function renderPreviewContent(content: string, fileType: string) {
+  if (fileType === 'csv' || fileType === 'xlsx') {
+    const lines = content.split('\n').filter(l => l.trim())
+    if (lines.length === 0) return <p className="empty">No content</p>
+    const rows = lines.map(line => line.split(/\t|,(?=(?:[^"]*"[^"]*")*[^"]*$)/))
+    return (
+      <div className="preview-table-wrap">
+        <table className="preview-table">
+          <thead><tr>{rows[0]?.map((cell, i) => <th key={i}>{cell.trim()}</th>)}</tr></thead>
+          <tbody>{rows.slice(1).map((row, ri) => <tr key={ri}>{row.map((cell, ci) => <td key={ci}>{cell.trim()}</td>)}</tr>)}</tbody>
+        </table>
+      </div>
+    )
+  }
+  if (['md', 'html', 'htm'].includes(fileType)) {
+    return <pre className="preview-code">{content}</pre>
+  }
+  return <pre className="preview-text">{content}</pre>
+}
+
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [question, setQuestion] = useState('')
@@ -78,6 +98,9 @@ export default function App() {
   const [showInspector, setShowInspector] = useState(false)
   const [activeView, setActiveView] = useState<'workspace' | 'history'>('workspace')
   const [activeCitation, setActiveCitation] = useState<Citation | null>(null)
+  const [previewDocId, setPreviewDocId] = useState<string | null>(null)
+  const [previewContent, setPreviewContent] = useState<{ filename: string; file_type: string; content: string } | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
   const streamRenderFrame = useRef<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const queryClient = useQueryClient()
@@ -168,6 +191,23 @@ export default function App() {
   const handleCitationClick = useCallback((c: Citation) => setActiveCitation(c), [])
   const closeCitation = useCallback(() => setActiveCitation(null), [])
   const clearMessages = useCallback(() => setMessages([]), [])
+
+  const openPreview = useCallback(async (docId: string) => {
+    setPreviewDocId(docId)
+    setPreviewLoading(true)
+    try {
+      const res = await fetch(`${API}/api/v1/documents/${docId}/content`)
+      if (!res.ok) throw new Error((await res.json()).detail ?? 'Cannot load preview.')
+      const data = await res.json()
+      setPreviewContent({ filename: data.filename, file_type: data.file_type, content: data.content })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Preview failed.')
+      setPreviewDocId(null)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }, [])
+  const closePreview = useCallback(() => { setPreviewDocId(null); setPreviewContent(null) }, [])
   const toggleInspector = useCallback(() => setShowInspector(prev => !prev), [])
   const toggleDark = useCallback(() => setDark(prev => !prev), [])
 
@@ -239,7 +279,7 @@ export default function App() {
           <input aria-label="Collection name" value={collection} onChange={e => setCollection(e.target.value)} placeholder="Collection name" />
         </div>
         <div className="library-toolbar"><select value={filterCollection} onChange={e => setFilterCollection(e.target.value)}><option>All collections</option>{collections.map(name => <option key={name}>{name}</option>)}</select><span>{visibleDocs.length} documents</span></div>
-        <div className="documents">{visibleDocs.length === 0 ? <p className="empty">Add a source to begin investigating.</p> : visibleDocs.map(doc => <DocumentItem key={doc.id} doc={doc} selected={selectedIds.includes(doc.id)} onToggle={toggleDocSelection} onDelete={removeDocument} />)}</div>
+        <div className="documents">{visibleDocs.length === 0 ? <p className="empty">Add a source to begin investigating.</p> : visibleDocs.map(doc => <DocumentItem key={doc.id} doc={doc} selected={selectedIds.includes(doc.id)} onToggle={toggleDocSelection} onDelete={removeDocument} onPreview={openPreview} />)}</div>
       </>}
     </section>
     <section className="chat">
@@ -250,5 +290,6 @@ export default function App() {
       {(error || documentsQuery.isError) && <p className="error">{error || 'Cannot reach the API. Start the FastAPI backend to use the workspace.'}</p>}
     </section>
     {activeCitation && <div className="modal-backdrop" role="dialog" aria-label="Source evidence" onClick={closeCitation} onKeyDown={e => { if (e.key === 'Escape') closeCitation() }}><aside className="citation-modal" onClick={e => e.stopPropagation()}><button onClick={closeCitation}>×</button><p className="eyebrow">SOURCE EVIDENCE</p><h3>{activeCitation.filename}{activeCitation.page_number ? ` · page ${activeCitation.page_number}` : ''}</h3><p>{activeCitation.excerpt}</p><footer>Semantic similarity: {Math.round(activeCitation.similarity * 100)}%</footer></aside></div>}
+    {previewDocId && <div className="modal-backdrop" role="dialog" aria-label="Document preview" onClick={closePreview} onKeyDown={e => { if (e.key === 'Escape') closePreview() }}><aside className="preview-modal" onClick={e => e.stopPropagation()}><button onClick={closePreview}>×</button>{previewLoading ? <p className="preview-loading">Loading preview…</p> : previewContent ? <><p className="eyebrow">DOCUMENT PREVIEW</p><h3><span className="file-type" style={{ marginRight: 8 }}>{fileIcon(previewContent.file_type)}</span>{previewContent.filename}</h3><div className="preview-body">{renderPreviewContent(previewContent.content, previewContent.file_type)}</div></> : null}</aside></div>}
   </main>
 }

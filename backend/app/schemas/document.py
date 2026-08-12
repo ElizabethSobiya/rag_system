@@ -19,6 +19,16 @@ class DocumentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DocumentContentResponse(BaseModel):
+    id: uuid.UUID
+    filename: str
+    file_type: str
+    content: str
+    chunk_count: int
+
+    model_config = {"from_attributes": True}
+
+
 class UploadResponse(BaseModel):
     id: uuid.UUID
     filename: str
