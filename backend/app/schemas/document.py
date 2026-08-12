@@ -29,6 +29,14 @@ class DocumentContentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class BulkDeleteRequest(BaseModel):
+    document_ids: list[uuid.UUID]
+
+
+class BulkDeleteResponse(BaseModel):
+    deleted_count: int
+
+
 class UploadResponse(BaseModel):
     id: uuid.UUID
     filename: str

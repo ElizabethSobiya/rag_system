@@ -6,12 +6,13 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Up
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.schemas.document import DocumentContentResponse, DocumentResponse, UploadResponse
+from app.schemas.document import BulkDeleteRequest, BulkDeleteResponse, DocumentContentResponse, DocumentResponse, UploadResponse
 from app.services.chunker import chunk_pages
 from app.services.embedder import embed_texts
 from app.services.parser import parse_document
 from app.services.vector_store import (
     delete_document,
+    delete_documents_bulk,
     get_all_documents,
     get_document_content,
     insert_chunks,
@@ -137,6 +138,19 @@ async def list_documents(
 ):
     rows = await get_all_documents(db, limit=min(limit, 500), offset=offset)
     return [DocumentResponse(**row) for row in rows]
+
+
+@router.post("/bulk-delete", response_model=BulkDeleteResponse)
+async def bulk_delete_documents(
+    body: BulkDeleteRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    if not body.document_ids:
+        raise HTTPException(status_code=400, detail="No document IDs provided.")
+    if len(body.document_ids) > 100:
+        raise HTTPException(status_code=400, detail="Cannot delete more than 100 documents at once.")
+    deleted = await delete_documents_bulk(db, doc_ids=body.document_ids)
+    return BulkDeleteResponse(deleted_count=deleted)
 
 
 @router.get("/{doc_id}/content", response_model=DocumentContentResponse)
