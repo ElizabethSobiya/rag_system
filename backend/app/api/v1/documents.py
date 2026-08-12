@@ -6,13 +6,14 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Up
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.schemas.document import DocumentResponse, UploadResponse
+from app.schemas.document import DocumentContentResponse, DocumentResponse, UploadResponse
 from app.services.chunker import chunk_pages
 from app.services.embedder import embed_texts
 from app.services.parser import parse_document
 from app.services.vector_store import (
     delete_document,
     get_all_documents,
+    get_document_content,
     insert_chunks,
     insert_document,
     update_document_status,
@@ -136,6 +137,25 @@ async def list_documents(
 ):
     rows = await get_all_documents(db, limit=min(limit, 500), offset=offset)
     return [DocumentResponse(**row) for row in rows]
+
+
+@router.get("/{doc_id}/content", response_model=DocumentContentResponse)
+async def get_document_content_endpoint(
+    doc_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    result = await get_document_content(db, doc_id=doc_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    if result["status"] != "ready":
+        raise HTTPException(status_code=409, detail="Document is still processing.")
+    return DocumentContentResponse(
+        id=result["id"],
+        filename=result["filename"],
+        file_type=result["file_type"],
+        content=result["content"],
+        chunk_count=len(result["chunks"]),
+    )
 
 
 @router.delete("/{doc_id}", status_code=204)
