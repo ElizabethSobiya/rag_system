@@ -145,6 +145,22 @@ export default function App() {
     },
   })
 
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const response = await fetch(`${API}/api/v1/documents/bulk-delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ document_ids: ids }),
+      })
+      if (!response.ok) throw new Error((await response.json()).detail ?? 'Bulk delete failed.')
+      return response.json()
+    },
+    onSuccess: () => {
+      setSelectedIds([])
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
+    },
+  })
+
   const historyQuery = useQuery({
     queryKey: ['history'],
     queryFn: async (): Promise<{ items: HistoryEntry[]; total: number }> => {
@@ -187,6 +203,18 @@ export default function App() {
   const removeDocument = useCallback(async (id: string) => {
     try { await deleteMutation.mutateAsync(id) } catch (e) { setError(e instanceof Error ? e.message : 'Unable to delete this document.') }
   }, [deleteMutation])
+
+  const bulkDelete = useCallback(async () => {
+    if (!selectedIds.length) return
+    if (!confirm(`Delete ${selectedIds.length} document${selectedIds.length === 1 ? '' : 's'}? This cannot be undone.`)) return
+    try { await bulkDeleteMutation.mutateAsync(selectedIds) } catch (e) { setError(e instanceof Error ? e.message : 'Bulk delete failed.') }
+  }, [selectedIds, bulkDeleteMutation])
+
+  const selectAllVisible = useCallback(() => {
+    const allVisibleIds = visibleDocs.map(d => d.id)
+    const allSelected = allVisibleIds.every(id => selectedIds.includes(id))
+    setSelectedIds(allSelected ? selectedIds.filter(id => !allVisibleIds.includes(id)) : [...new Set([...selectedIds, ...allVisibleIds])])
+  }, [visibleDocs, selectedIds])
 
   const handleCitationClick = useCallback((c: Citation) => setActiveCitation(c), [])
   const closeCitation = useCallback(() => setActiveCitation(null), [])
@@ -278,7 +306,12 @@ export default function App() {
           <label htmlFor="file-upload"><strong>{uploadMutation.isPending ? `Uploading ${(uploadMutation.variables?.length ?? 0)} file${(uploadMutation.variables?.length ?? 0) === 1 ? '' : 's'}…` : 'Drop documents here'}</strong><span>or browse files · PDF, DOCX, HTML, MD, TXT, CSV, XLSX · 25 MB max</span></label>
           <input aria-label="Collection name" value={collection} onChange={e => setCollection(e.target.value)} placeholder="Collection name" />
         </div>
-        <div className="library-toolbar"><select value={filterCollection} onChange={e => setFilterCollection(e.target.value)}><option>All collections</option>{collections.map(name => <option key={name}>{name}</option>)}</select><span>{visibleDocs.length} documents</span></div>
+        <div className="library-toolbar">
+          <select value={filterCollection} onChange={e => setFilterCollection(e.target.value)}><option>All collections</option>{collections.map(name => <option key={name}>{name}</option>)}</select>
+          {visibleDocs.length > 0 && <button className="select-all" onClick={selectAllVisible}>{visibleDocs.every(d => selectedIds.includes(d.id)) ? 'Deselect all' : 'Select all'}</button>}
+          {selectedIds.length > 0 && <button className="bulk-delete" onClick={bulkDelete} disabled={bulkDeleteMutation.isPending}>{bulkDeleteMutation.isPending ? 'Deleting…' : `Delete ${selectedIds.length} selected`}</button>}
+          <span>{visibleDocs.length} documents</span>
+        </div>
         <div className="documents">{visibleDocs.length === 0 ? <p className="empty">Add a source to begin investigating.</p> : visibleDocs.map(doc => <DocumentItem key={doc.id} doc={doc} selected={selectedIds.includes(doc.id)} onToggle={toggleDocSelection} onDelete={removeDocument} onPreview={openPreview} />)}</div>
       </>}
     </section>

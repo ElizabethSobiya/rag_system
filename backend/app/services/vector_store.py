@@ -220,6 +220,18 @@ async def get_document_content(
     }
 
 
+async def delete_documents_bulk(db: AsyncSession, *, doc_ids: list[uuid.UUID]) -> int:
+    """Delete multiple documents and their chunks in one operation."""
+    if not doc_ids:
+        return 0
+    result = await db.execute(
+        text("DELETE FROM documents WHERE id = ANY(CAST(:ids AS uuid[]))"),
+        {"ids": [str(d) for d in doc_ids]},
+    )
+    await db.commit()
+    return result.rowcount
+
+
 async def delete_document(db: AsyncSession, *, doc_id: uuid.UUID) -> bool:
     result = await db.execute(
         text("DELETE FROM documents WHERE id = :id"),
