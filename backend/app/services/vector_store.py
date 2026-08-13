@@ -14,14 +14,15 @@ async def insert_document(
     filename: str,
     file_type: str,
     file_size: int,
+    file_data: bytes | None = None,
     collection_name: str = "General",
     auto_commit: bool = True,
 ) -> None:
     await db.execute(
         text(
             """
-            INSERT INTO documents (id, filename, file_type, file_size, collection_name, status, created_at, updated_at)
-            VALUES (:id, :filename, :file_type, :file_size, :collection_name, 'processing', NOW(), NOW())
+            INSERT INTO documents (id, filename, file_type, file_size, file_data, collection_name, status, created_at, updated_at)
+            VALUES (:id, :filename, :file_type, :file_size, :file_data, :collection_name, 'processing', NOW(), NOW())
             """
         ),
         {
@@ -29,6 +30,7 @@ async def insert_document(
             "filename": filename,
             "file_type": file_type,
             "file_size": file_size,
+            "file_data": file_data,
             "collection_name": collection_name,
         },
     )
@@ -218,6 +220,22 @@ async def get_document_content(
         "chunks": [dict(r) for r in rows],
         "content": "\n\n".join(r["content"] for r in rows),
     }
+
+
+async def get_document_file(
+    db: AsyncSession,
+    *,
+    doc_id: uuid.UUID,
+) -> dict | None:
+    """Retrieve the original file bytes for download."""
+    result = await db.execute(
+        text("SELECT id, filename, file_type, file_data FROM documents WHERE id = :id"),
+        {"id": str(doc_id)},
+    )
+    row = result.mappings().first()
+    if not row:
+        return None
+    return dict(row)
 
 
 async def delete_documents_bulk(db: AsyncSession, *, doc_ids: list[uuid.UUID]) -> int:

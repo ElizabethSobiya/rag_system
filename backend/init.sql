@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS documents (
     filename    TEXT NOT NULL,
     file_type   TEXT NOT NULL,
     file_size   INTEGER NOT NULL,
+    file_data   BYTEA,
     collection_name TEXT NOT NULL DEFAULT 'General',
     chunk_count INTEGER NOT NULL DEFAULT 0,
     status      TEXT NOT NULL DEFAULT 'processing',
@@ -17,6 +18,9 @@ CREATE TABLE IF NOT EXISTS documents (
 -- Safe for databases created by earlier versions of the project.
 ALTER TABLE documents
     ADD COLUMN IF NOT EXISTS collection_name TEXT NOT NULL DEFAULT 'General';
+
+ALTER TABLE documents
+    ADD COLUMN IF NOT EXISTS file_data BYTEA;
 
 CREATE TABLE IF NOT EXISTS chunks (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

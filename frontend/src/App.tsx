@@ -24,13 +24,14 @@ function formatFileSize(bytes: number): string {
 let messageIdCounter = 0
 function nextMessageId() { return `msg-${++messageIdCounter}` }
 
-const DocumentItem = memo(function DocumentItem({ doc, selected, onToggle, onDelete, onPreview }: { doc: Document; selected: boolean; onToggle: (id: string) => void; onDelete: (id: string) => void; onPreview: (id: string) => void }) {
+const DocumentItem = memo(function DocumentItem({ doc, selected, onToggle, onDelete, onPreview, onDownload }: { doc: Document; selected: boolean; onToggle: (id: string) => void; onDelete: (id: string) => void; onPreview: (id: string) => void; onDownload: (id: string, filename: string) => void }) {
   return (
     <article className="document">
       <input aria-label={`Select ${doc.filename}`} type="checkbox" checked={selected} onChange={() => onToggle(doc.id)}/>
       <span className="file-type">{fileIcon(doc.file_type)}</span>
       <div><strong className="doc-preview-link" onClick={() => doc.status === 'ready' && onPreview(doc.id)} style={{ cursor: doc.status === 'ready' ? 'pointer' : 'default' }}>{doc.filename}</strong><p>{doc.collection_name} · {formatFileSize(doc.file_size)} · {doc.chunk_count} chunks</p>{doc.error_msg && <small>{doc.error_msg}</small>}</div>
       <span className={`doc-status ${doc.status}`}>{doc.status}</span>
+      <button className="download" onClick={() => onDownload(doc.id, doc.filename)} aria-label={`Download ${doc.filename}`} title="Download">↓</button>
       <button className="delete" onClick={() => onDelete(doc.id)} aria-label={`Delete ${doc.filename}`}>×</button>
     </article>
   )
@@ -204,6 +205,18 @@ export default function App() {
     try { await deleteMutation.mutateAsync(id) } catch (e) { setError(e instanceof Error ? e.message : 'Unable to delete this document.') }
   }, [deleteMutation])
 
+  const downloadDocument = useCallback(async (id: string, filename: string) => {
+    try {
+      const res = await fetch(`${API}/api/v1/documents/${id}/download`)
+      if (!res.ok) { const data = await res.json(); throw new Error(data.detail ?? 'Download failed.') }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = filename; document.body.appendChild(a); a.click()
+      document.body.removeChild(a); URL.revokeObjectURL(url)
+    } catch (e) { setError(e instanceof Error ? e.message : 'Download failed.') }
+  }, [])
+
   const bulkDelete = useCallback(async () => {
     if (!selectedIds.length) return
     if (!confirm(`Delete ${selectedIds.length} document${selectedIds.length === 1 ? '' : 's'}? This cannot be undone.`)) return
@@ -312,7 +325,7 @@ export default function App() {
           {selectedIds.length > 0 && <button className="bulk-delete" onClick={bulkDelete} disabled={bulkDeleteMutation.isPending}>{bulkDeleteMutation.isPending ? 'Deleting…' : `Delete ${selectedIds.length} selected`}</button>}
           <span>{visibleDocs.length} documents</span>
         </div>
-        <div className="documents">{visibleDocs.length === 0 ? <p className="empty">Add a source to begin investigating.</p> : visibleDocs.map(doc => <DocumentItem key={doc.id} doc={doc} selected={selectedIds.includes(doc.id)} onToggle={toggleDocSelection} onDelete={removeDocument} onPreview={openPreview} />)}</div>
+        <div className="documents">{visibleDocs.length === 0 ? <p className="empty">Add a source to begin investigating.</p> : visibleDocs.map(doc => <DocumentItem key={doc.id} doc={doc} selected={selectedIds.includes(doc.id)} onToggle={toggleDocSelection} onDelete={removeDocument} onPreview={openPreview} onDownload={downloadDocument} />)}</div>
       </>}
     </section>
     <section className="chat">
