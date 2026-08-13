@@ -3,6 +3,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -15,6 +16,7 @@ from app.services.vector_store import (
     delete_documents_bulk,
     get_all_documents,
     get_document_content,
+    get_document_file,
     insert_chunks,
     insert_document,
     update_document_status,
@@ -115,6 +117,7 @@ async def upload_document(
         filename=file.filename or "unknown",
         file_type=suffix.lstrip("."),
         file_size=len(file_bytes),
+        file_data=file_bytes,
         collection_name=collection_name.strip()[:120] or "General",
     )
 
@@ -169,6 +172,36 @@ async def get_document_content_endpoint(
         file_type=result["file_type"],
         content=result["content"],
         chunk_count=len(result["chunks"]),
+    )
+
+
+MIME_TYPES: dict[str, str] = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "csv": "text/csv",
+    "html": "text/html",
+    "htm": "text/html",
+    "md": "text/markdown",
+    "txt": "text/plain",
+}
+
+
+@router.get("/{doc_id}/download")
+async def download_document(
+    doc_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    result = await get_document_file(db, doc_id=doc_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    if not result["file_data"]:
+        raise HTTPException(status_code=404, detail="Original file data is not available for this document.")
+    content_type = MIME_TYPES.get(result["file_type"], "application/octet-stream")
+    return Response(
+        content=result["file_data"],
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{result["filename"]}"'},
     )
 
 

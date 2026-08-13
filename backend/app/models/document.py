@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, LargeBinary, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -19,6 +19,7 @@ class Document(Base):
     filename: Mapped[str] = mapped_column(Text, nullable=False)
     file_type: Mapped[str] = mapped_column(Text, nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     collection_name: Mapped[str] = mapped_column(Text, nullable=False, default="General")
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="processing")
