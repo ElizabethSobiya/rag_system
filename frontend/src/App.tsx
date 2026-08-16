@@ -102,6 +102,7 @@ export default function App() {
   const [previewDocId, setPreviewDocId] = useState<string | null>(null)
   const [previewContent, setPreviewContent] = useState<{ filename: string; file_type: string; content: string } | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [searchFilter, setSearchFilter] = useState('')
   const streamRenderFrame = useRef<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const queryClient = useQueryClient()
@@ -117,12 +118,37 @@ export default function App() {
   const documents = documentsQuery.data ?? []
 
   const collections = useMemo(() => [...new Set(documents.map(d => d.collection_name))], [documents])
-  const visibleDocs = useMemo(() => filterCollection === 'All collections' ? documents : documents.filter(d => d.collection_name === filterCollection), [documents, filterCollection])
+  const visibleDocs = useMemo(() => {
+    let filtered = filterCollection === 'All collections' ? documents : documents.filter(d => d.collection_name === filterCollection)
+    if (searchFilter.trim()) {
+      const term = searchFilter.trim().toLowerCase()
+      filtered = filtered.filter(d => d.filename.toLowerCase().includes(term))
+    }
+    return filtered
+  }, [documents, filterCollection, searchFilter])
+
+  const libraryStats = useMemo(() => ({
+    totalDocs: documents.length,
+    totalSize: documents.reduce((sum, d) => sum + d.file_size, 0),
+    collectionCount: collections.length,
+    readyCount: documents.filter(d => d.status === 'ready').length,
+  }), [documents, collections])
 
   useEffect(() => () => {
     if (streamRenderFrame.current) cancelAnimationFrame(streamRenderFrame.current)
     abortControllerRef.current?.abort()
   }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (activeCitation) closeCitation()
+        else if (previewDocId) closePreview()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [activeCitation, previewDocId])
 
   const uploadMutation = useMutation({
     mutationFn: async (files: File[]) => Promise.all(files.map(async file => {
@@ -233,6 +259,27 @@ export default function App() {
   const closeCitation = useCallback(() => setActiveCitation(null), [])
   const clearMessages = useCallback(() => setMessages([]), [])
 
+  const exportConversation = useCallback(() => {
+    if (!messages.length) return
+    const lines = messages.map(m => {
+      const prefix = m.role === 'user' ? 'You' : 'TraceRAG'
+      let text = `${prefix}: ${m.text}`
+      if (m.result) {
+        text += `\n  Confidence: ${Math.round(m.result.confidence * 100)}%`
+        text += `\n  Evidence: ${statusLabel[m.result.evidence_status] ?? m.result.evidence_status}`
+        const refs = m.result.citations.filter(c => c.referenced)
+        if (refs.length) text += `\n  Sources: ${refs.map(c => `${c.filename}${c.page_number ? ` p.${c.page_number}` : ''}`).join(', ')}`
+      }
+      return text
+    }).join('\n\n')
+    const blob = new Blob([`TraceRAG Conversation Export\n${'='.repeat(40)}\n\n${lines}\n`], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `tracerag-export-${new Date().toISOString().slice(0, 10)}.txt`
+    document.body.appendChild(a); a.click()
+    document.body.removeChild(a); URL.revokeObjectURL(url)
+  }, [messages])
+
   const openPreview = useCallback(async (docId: string) => {
     setPreviewDocId(docId)
     setPreviewLoading(true)
@@ -319,8 +366,15 @@ export default function App() {
           <label htmlFor="file-upload"><strong>{uploadMutation.isPending ? `Uploading ${(uploadMutation.variables?.length ?? 0)} file${(uploadMutation.variables?.length ?? 0) === 1 ? '' : 's'}…` : 'Drop documents here'}</strong><span>or browse files · PDF, DOCX, HTML, MD, TXT, CSV, XLSX · 25 MB max</span></label>
           <input aria-label="Collection name" value={collection} onChange={e => setCollection(e.target.value)} placeholder="Collection name" />
         </div>
+        {documents.length > 0 && <div className="library-stats">
+          <span>{libraryStats.totalDocs} docs</span>
+          <span>{formatFileSize(libraryStats.totalSize)}</span>
+          <span>{libraryStats.collectionCount} collection{libraryStats.collectionCount !== 1 ? 's' : ''}</span>
+          <span>{libraryStats.readyCount} ready</span>
+        </div>}
         <div className="library-toolbar">
           <select value={filterCollection} onChange={e => setFilterCollection(e.target.value)}><option>All collections</option>{collections.map(name => <option key={name}>{name}</option>)}</select>
+          <input className="doc-search" value={searchFilter} onChange={e => setSearchFilter(e.target.value)} placeholder="Search documents…" aria-label="Search documents" />
           {visibleDocs.length > 0 && <button className="select-all" onClick={selectAllVisible}>{visibleDocs.every(d => selectedIds.includes(d.id)) ? 'Deselect all' : 'Select all'}</button>}
           {selectedIds.length > 0 && <button className="bulk-delete" onClick={bulkDelete} disabled={bulkDeleteMutation.isPending}>{bulkDeleteMutation.isPending ? 'Deleting…' : `Delete ${selectedIds.length} selected`}</button>}
           <span>{visibleDocs.length} documents</span>
@@ -329,7 +383,7 @@ export default function App() {
       </>}
     </section>
     <section className="chat">
-      <header><div><p className="eyebrow">RESEARCH CONSOLE</p><h2>Ask your evidence</h2></div><span className="scope">{selectedIds.length ? `${selectedIds.length} selected sources` : filterCollection}</span></header>
+      <header><div><p className="eyebrow">RESEARCH CONSOLE</p><h2>Ask your evidence</h2></div><div className="chat-actions">{messages.length > 0 && <button className="export-btn" onClick={exportConversation} title="Export conversation">↗ Export</button>}<span className="scope">{selectedIds.length ? `${selectedIds.length} selected sources` : filterCollection}</span></div></header>
       <div className="messages">{messages.length === 0 && <div className="welcome"><span>✦</span><h3>Turn documents into defensible answers.</h3><p>Ask a question, open every source, and inspect how retrieval chose its evidence.</p><div className="suggestions"><button onClick={() => setQuestion('What are the main conclusions across these documents?')}>Summarize the conclusions</button><button onClick={() => setQuestion('Where do these documents disagree?')}>Find disagreements</button></div></div>}
       {messages.map(message => <MessageItem key={message.id} message={message} showInspector={showInspector} onCitationClick={handleCitationClick} />)}{loading && <article className="message assistant"><div className="avatar">◇</div><div className="typing"><i></i><i></i><i></i> Retrieving evidence…</div></article>}</div>
       <form className="composer" onSubmit={ask}><textarea value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(e) } }} placeholder="Ask a question about your evidence…" rows={2}/><button type="submit" disabled={loading || !question.trim()}>Send ↑</button><small>Press Enter to send · Shift + Enter for new line</small></form>
