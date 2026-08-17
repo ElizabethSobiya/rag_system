@@ -38,12 +38,24 @@ const DocumentItem = memo(function DocumentItem({ doc, selected, onToggle, onDel
 })
 
 const MessageItem = memo(function MessageItem({ message, showInspector, onCitationClick }: { message: Message; showInspector: boolean; onCitationClick: (c: Citation) => void }) {
+  const [copied, setCopied] = useState(false)
   const referencedCitations = useMemo(() => message.result?.citations.filter(c => c.referenced) ?? [], [message.result])
+  const copyToClipboard = useCallback(() => {
+    navigator.clipboard.writeText(message.text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }, [message.text])
   return (
     <article className={`message ${message.role}`}>
       <div className="avatar">{message.role === 'user' ? 'You' : '◇'}</div>
       <div className="message-body">
         <p>{message.text}</p>
+        {message.role === 'assistant' && message.text && (
+          <button className="copy-btn" onClick={copyToClipboard} title={copied ? 'Copied!' : 'Copy to clipboard'}>
+            {copied ? '✓ Copied' : '⧉ Copy'}
+          </button>
+        )}
         {message.result && <>
           <div className={`evidence-status ${message.result.evidence_status}`}>
             <span>{statusLabel[message.result.evidence_status]}</span>
@@ -105,6 +117,7 @@ export default function App() {
   const [searchFilter, setSearchFilter] = useState('')
   const streamRenderFrame = useRef<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const queryClient = useQueryClient()
   const documentsQuery = useQuery({
     queryKey: ['documents'],
@@ -138,6 +151,10 @@ export default function App() {
     if (streamRenderFrame.current) cancelAnimationFrame(streamRenderFrame.current)
     abortControllerRef.current?.abort()
   }, [])
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -385,7 +402,7 @@ export default function App() {
     <section className="chat">
       <header><div><p className="eyebrow">RESEARCH CONSOLE</p><h2>Ask your evidence</h2></div><div className="chat-actions">{messages.length > 0 && <button className="export-btn" onClick={exportConversation} title="Export conversation">↗ Export</button>}<span className="scope">{selectedIds.length ? `${selectedIds.length} selected sources` : filterCollection}</span></div></header>
       <div className="messages">{messages.length === 0 && <div className="welcome"><span>✦</span><h3>Turn documents into defensible answers.</h3><p>Ask a question, open every source, and inspect how retrieval chose its evidence.</p><div className="suggestions"><button onClick={() => setQuestion('What are the main conclusions across these documents?')}>Summarize the conclusions</button><button onClick={() => setQuestion('Where do these documents disagree?')}>Find disagreements</button></div></div>}
-      {messages.map(message => <MessageItem key={message.id} message={message} showInspector={showInspector} onCitationClick={handleCitationClick} />)}{loading && <article className="message assistant"><div className="avatar">◇</div><div className="typing"><i></i><i></i><i></i> Retrieving evidence…</div></article>}</div>
+      {messages.map(message => <MessageItem key={message.id} message={message} showInspector={showInspector} onCitationClick={handleCitationClick} />)}{loading && <article className="message assistant"><div className="avatar">◇</div><div className="typing"><i></i><i></i><i></i> Retrieving evidence…</div></article>}<div ref={messagesEndRef} /></div>
       <form className="composer" onSubmit={ask}><textarea value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(e) } }} placeholder="Ask a question about your evidence…" rows={2}/><button type="submit" disabled={loading || !question.trim()}>Send ↑</button><small>Press Enter to send · Shift + Enter for new line</small></form>
       {(error || documentsQuery.isError) && <p className="error">{error || 'Cannot reach the API. Start the FastAPI backend to use the workspace.'}</p>}
     </section>
