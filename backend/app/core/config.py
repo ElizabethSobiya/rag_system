@@ -35,5 +35,8 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
+    # When True, disables /docs and /redoc to reduce attack surface
+    disable_openapi: bool = False
+
 
 settings = Settings()
