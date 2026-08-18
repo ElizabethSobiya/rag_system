@@ -1,6 +1,10 @@
 import asyncio
+import logging
+import os
+import re
 import uuid
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -22,10 +26,45 @@ from app.services.vector_store import (
     update_document_status,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".html", ".htm", ".txt", ".md", ".csv", ".xlsx"}
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+# Magic-byte signatures for binary formats (text formats are validated by extension only)
+_MAGIC_SIGNATURES: dict[str, list[bytes]] = {
+    ".pdf": [b"%PDF"],
+    ".docx": [b"PK\x03\x04"],  # ZIP-based Office format
+    ".xlsx": [b"PK\x03\x04"],  # ZIP-based Office format
+}
+
+
+def _sanitize_filename(raw: str) -> str:
+    """Strip path components and dangerous characters from a user-supplied filename."""
+    name = os.path.basename(raw)
+    # Remove null bytes and control characters
+    name = re.sub(r"[\x00-\x1f\x7f]", "", name)
+    # Keep only safe characters: alphanumeric, dot, hyphen, underscore, space
+    name = re.sub(r"[^\w.\- ]", "_", name)
+    # Collapse consecutive dots/underscores (prevent hidden files like ..foo)
+    name = re.sub(r"\.{2,}", ".", name)
+    # Limit length
+    name = name[:255]
+    return name or "document"
+
+
+def _validate_magic_bytes(file_bytes: bytes, extension: str) -> None:
+    """Verify that binary files match their expected magic-byte signatures."""
+    signatures = _MAGIC_SIGNATURES.get(extension)
+    if signatures is None:
+        return  # Text-based formats don't need magic-byte checks
+    if not any(file_bytes.startswith(sig) for sig in signatures):
+        raise HTTPException(
+            status_code=400,
+            detail=f"File content does not match the expected format for '{extension}'.",
+        )
 
 
 async def _read_upload(file: UploadFile) -> bytes:
@@ -84,11 +123,12 @@ async def _process_document(
             await db.commit()
         except Exception as exc:
             await db.rollback()
+            logger.exception("Document processing failed for %s", doc_id)
             await update_document_status(
                 db,
                 doc_id=doc_id,
                 status="error",
-                error_msg=str(exc)[:500],
+                error_msg="Failed to process document. Please try again or upload a different file.",
             )
 
 
@@ -101,7 +141,9 @@ async def upload_document(
 ):
     from pathlib import Path
 
-    suffix = Path(file.filename or "").suffix.lower()
+    safe_name = _sanitize_filename(file.filename or "unknown")
+
+    suffix = Path(safe_name).suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
@@ -109,25 +151,29 @@ async def upload_document(
         )
 
     file_bytes = await _read_upload(file)
+    _validate_magic_bytes(file_bytes, suffix)
+
+    # Sanitize collection name: strip control chars and limit length
+    clean_collection = re.sub(r"[^\w.\- ]", "_", collection_name.strip())[:120] or "General"
 
     doc_id = uuid.uuid4()
     await insert_document(
         db,
         doc_id=doc_id,
-        filename=file.filename or "unknown",
+        filename=safe_name,
         file_type=suffix.lstrip("."),
         file_size=len(file_bytes),
         file_data=file_bytes,
-        collection_name=collection_name.strip()[:120] or "General",
+        collection_name=clean_collection,
     )
 
     background_tasks.add_task(
-        _process_document, doc_id, file_bytes, file.filename or "unknown"
+        _process_document, doc_id, file_bytes, safe_name
     )
 
     return UploadResponse(
         id=doc_id,
-        filename=file.filename or "unknown",
+        filename=safe_name,
         status="processing",
         message="Document received and is being processed.",
     )
@@ -198,10 +244,16 @@ async def download_document(
     if not result["file_data"]:
         raise HTTPException(status_code=404, detail="Original file data is not available for this document.")
     content_type = MIME_TYPES.get(result["file_type"], "application/octet-stream")
+    safe_name = _sanitize_filename(result["filename"])
+    # RFC 5987 encoding for non-ASCII filenames
+    encoded_name = quote(safe_name)
     return Response(
         content=result["file_data"],
         media_type=content_type,
-        headers={"Content-Disposition": f'attachment; filename="{result["filename"]}"'},
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
