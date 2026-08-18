@@ -2,12 +2,13 @@
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, get_db
+from app.middleware.rate_limit import query_limiter
 from app.models.document import SearchHistory
 from app.schemas.query import QueryRequest, QueryResponse
 from app.services.embedder import embed_query
@@ -142,9 +143,11 @@ async def _save_history(
 
 @router.post("/", response_model=QueryResponse)
 async def query_documents(
+    http_request: Request,
     request: QueryRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    query_limiter.check(http_request)
     chunks = await _get_chunks(request, db)
     result = await generate_answer(request.query, chunks)
     confidence, evidence_status, debug = _evidence_metadata(chunks)
@@ -165,10 +168,12 @@ async def query_documents(
 
 @router.post("/stream")
 async def stream_query_documents(
+    http_request: Request,
     request: QueryRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Return token-by-token grounded answers as server-sent events."""
+    query_limiter.check(http_request)
     chunks = await _get_chunks(request, db)
     confidence, evidence_status, debug = _evidence_metadata(chunks)
 

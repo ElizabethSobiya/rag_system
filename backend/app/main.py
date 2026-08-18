@@ -34,6 +34,7 @@ app = FastAPI(
     title="RAG System API",
     version="1.0.0",
     lifespan=lifespan,
+    **({"docs_url": None, "redoc_url": None, "openapi_url": None} if settings.disable_openapi else {}),
 )
 
 app.add_middleware(SecurityHeadersMiddleware)

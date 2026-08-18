@@ -6,11 +6,12 @@ import uuid
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.middleware.rate_limit import upload_limiter
 from app.schemas.document import BulkDeleteRequest, BulkDeleteResponse, DocumentContentResponse, DocumentResponse, UploadResponse
 from app.services.chunker import chunk_pages
 from app.services.embedder import embed_texts
@@ -134,11 +135,14 @@ async def _process_document(
 
 @router.post("/upload", response_model=UploadResponse, status_code=202)
 async def upload_document(
+    request: Request,
     file: UploadFile,
     background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_db)],
     collection_name: Annotated[str, Form()] = "General",
 ):
+    upload_limiter.check(request)
+
     from pathlib import Path
 
     safe_name = _sanitize_filename(file.filename or "unknown")
@@ -167,6 +171,12 @@ async def upload_document(
         collection_name=clean_collection,
     )
 
+    logger.info(
+        "Document uploaded: id=%s filename=%s size=%d collection=%s ip=%s",
+        doc_id, safe_name, len(file_bytes), clean_collection,
+        request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown"),
+    )
+
     background_tasks.add_task(
         _process_document, doc_id, file_bytes, safe_name
     )
@@ -191,6 +201,7 @@ async def list_documents(
 
 @router.post("/bulk-delete", response_model=BulkDeleteResponse)
 async def bulk_delete_documents(
+    request: Request,
     body: BulkDeleteRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
@@ -199,6 +210,11 @@ async def bulk_delete_documents(
     if len(body.document_ids) > 100:
         raise HTTPException(status_code=400, detail="Cannot delete more than 100 documents at once.")
     deleted = await delete_documents_bulk(db, doc_ids=body.document_ids)
+    logger.info(
+        "Bulk delete: count=%d ids=%s ip=%s",
+        deleted, [str(d) for d in body.document_ids],
+        request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown"),
+    )
     return BulkDeleteResponse(deleted_count=deleted)
 
 
@@ -235,6 +251,7 @@ MIME_TYPES: dict[str, str] = {
 
 @router.get("/{doc_id}/download")
 async def download_document(
+    request: Request,
     doc_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
@@ -245,6 +262,11 @@ async def download_document(
         raise HTTPException(status_code=404, detail="Original file data is not available for this document.")
     content_type = MIME_TYPES.get(result["file_type"], "application/octet-stream")
     safe_name = _sanitize_filename(result["filename"])
+    logger.info(
+        "Document downloaded: id=%s filename=%s ip=%s",
+        doc_id, safe_name,
+        request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown"),
+    )
     # RFC 5987 encoding for non-ASCII filenames
     encoded_name = quote(safe_name)
     return Response(
@@ -259,9 +281,15 @@ async def download_document(
 
 @router.delete("/{doc_id}", status_code=204)
 async def remove_document(
+    request: Request,
     doc_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     deleted = await delete_document(db, doc_id=doc_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Document not found.")
+    logger.info(
+        "Document deleted: id=%s ip=%s",
+        doc_id,
+        request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown"),
+    )
