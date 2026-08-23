@@ -4,7 +4,20 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.services.chunker import ChunkData
+
+# pgvector's default hnsw.ef_search is 40, which is below the candidate pool this
+# module requests for larger top_k values. When ef_search is smaller than the row
+# limit the index returns fewer rows than asked for rather than reporting an
+# error, so the breadth is raised per search transaction.
+_MAX_EF_SEARCH = 1000
+
+
+def _ef_search_sql(configured: int, *, candidate_k: int) -> str:
+    """Build the SET LOCAL statement bounding one search's HNSW breadth."""
+    effective = max(int(configured), int(candidate_k), 1)
+    return f"SET LOCAL hnsw.ef_search = {min(effective, _MAX_EF_SEARCH)}"
 
 
 async def insert_document(
@@ -131,6 +144,9 @@ async def search_similar_chunks(
         filters.append("d.collection_name = :collection_name")
         params["collection_name"] = collection_name
     where_clause = " AND ".join(filters)
+    await db.execute(
+        text(_ef_search_sql(settings.hnsw_ef_search, candidate_k=params["candidate_k"]))
+    )
     result = await db.execute(
         text(
             f"""
