@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     top_k_chunks: int = 5
     min_chunk_similarity: float = 0.25
     max_chunks_per_document: int = 2
+    # Search-time breadth of the HNSW index walk. Raised from pgvector's default
+    # of 40 so the candidate pool is not truncated by the index itself.
+    hnsw_ef_search: int = 100
 
     # CORS
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]

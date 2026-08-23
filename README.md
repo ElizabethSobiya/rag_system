@@ -75,6 +75,12 @@ To keep answers grounded across multiple sources, retrieval prefers at most
 backfilling unused result slots. Queries can override this with the optional
 `max_chunks_per_document` field.
 
+Vector search uses an HNSW index over the chunk embeddings. `HNSW_EF_SEARCH`
+(default `100`) controls how widely the index is walked at query time: higher
+values improve recall at some cost in latency. It is automatically raised to at
+least the size of the candidate pool a query requests, because pgvector returns
+fewer rows than asked for when `ef_search` is below the row limit.
+
 #### Frontend
 
 ```bash

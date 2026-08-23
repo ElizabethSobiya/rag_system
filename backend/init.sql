@@ -33,8 +33,14 @@ CREATE TABLE IF NOT EXISTS chunks (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS chunks_embedding_cosine_idx ON chunks
-    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+-- This file runs before any chunk exists. ivfflat derives its lists from the
+-- table contents at build time, so an index created here was trained on no rows
+-- and kept that clustering as the corpus grew. HNSW builds incrementally, so its
+-- graph reflects the rows actually inserted.
+DROP INDEX IF EXISTS chunks_embedding_cosine_idx;
+
+CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw_idx ON chunks
+    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 
 CREATE INDEX IF NOT EXISTS chunks_content_fts_idx ON chunks
     USING GIN (to_tsvector('english', content));
