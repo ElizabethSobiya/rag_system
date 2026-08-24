@@ -24,6 +24,23 @@ function formatFileSize(bytes: number): string {
 let messageIdCounter = 0
 function nextMessageId() { return `msg-${++messageIdCounter}` }
 
+// Prior exchanges sent with a question so the backend can resolve follow-ups like
+// "what about the second one?". Only completed pairs are included; the backend caps
+// how many turns it replays, and answer length is bounded by its schema.
+const MAX_SENT_TURNS = 6
+const MAX_SENT_ANSWER_CHARS = 8000
+function conversationHistory(messages: Message[]) {
+  const turns: Array<{ question: string; answer: string }> = []
+  for (let i = 0; i < messages.length - 1; i++) {
+    const question = messages[i]
+    const answer = messages[i + 1]
+    if (question.role !== 'user' || answer.role !== 'assistant') continue
+    if (!question.text.trim() || !answer.text.trim()) continue
+    turns.push({ question: question.text, answer: answer.text.slice(0, MAX_SENT_ANSWER_CHARS) })
+  }
+  return turns.slice(-MAX_SENT_TURNS)
+}
+
 const DocumentItem = memo(function DocumentItem({ doc, selected, onToggle, onDelete, onPreview, onDownload }: { doc: Document; selected: boolean; onToggle: (id: string) => void; onDelete: (id: string) => void; onPreview: (id: string) => void; onDownload: (id: string, filename: string) => void }) {
   return (
     <article className="document">
@@ -324,7 +341,7 @@ export default function App() {
     const userMsgId = nextMessageId(); const assistantMsgId = nextMessageId()
     setMessages(old => [...old, { id: userMsgId, role: 'user', text: query }, { id: assistantMsgId, role: 'assistant', text: '' }]); setQuestion(''); setLoading(true); setError('')
     try {
-      const payload = { query, top_k: 6, document_ids: selectedIds, collection_name: filterCollection === 'All collections' ? null : filterCollection }
+      const payload = { query, history: conversationHistory(messages), top_k: 6, document_ids: selectedIds, collection_name: filterCollection === 'All collections' ? null : filterCollection }
       const response = await fetch(`${API}/api/v1/query/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: controller.signal })
       if (!response.ok || !response.body) { const data = await response.json(); throw new Error(data.detail ?? 'Unable to answer this question.') }
       const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''; let fullAnswer = ''
