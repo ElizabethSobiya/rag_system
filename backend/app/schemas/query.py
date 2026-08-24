@@ -8,11 +8,25 @@ from pydantic import BaseModel, Field, StringConstraints, field_validator
 _VALID_FILE_TYPES = {"pdf", "docx", "html", "htm", "txt", "md", "csv", "xlsx"}
 
 
+class ConversationTurn(BaseModel):
+    """One completed exchange, replayed so follow-up questions can be resolved."""
+
+    question: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=2000),
+    ]
+    answer: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=8000),
+    ]
+
+
 class QueryRequest(BaseModel):
     query: Annotated[
         str,
         StringConstraints(strip_whitespace=True, min_length=1, max_length=2000),
     ]
+    history: list[ConversationTurn] = Field(default_factory=list, max_length=20)
     top_k: int = Field(default=5, ge=1, le=20)
     document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=50)
     file_types: list[str] = Field(default_factory=list, max_length=10)
@@ -40,6 +54,9 @@ class Citation(BaseModel):
 
 class QueryResponse(BaseModel):
     query: str
+    # The standalone question retrieval actually ran on. Equal to `query` unless a
+    # follow-up had to be rewritten against the conversation.
+    search_query: str
     answer: str
     citations: list[Citation]
     confidence: float

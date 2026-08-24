@@ -75,6 +75,15 @@ To keep answers grounded across multiple sources, retrieval prefers at most
 backfilling unused result slots. Queries can override this with the optional
 `max_chunks_per_document` field.
 
+Follow-up questions are supported. Callers may send prior exchanges as the
+optional `history` field (a list of `{question, answer}` turns); the frontend sends
+the current conversation automatically. Because a follow-up like "what about the
+second one?" is a poor search query on its own, it is first rewritten into a
+standalone question, and that rewrite is what gets embedded and searched. The
+rewrite is returned as `search_query` on the response so it stays inspectable, and
+any failure falls back to the question as asked. `MAX_HISTORY_TURNS` (default `6`)
+bounds how many past exchanges are replayed.
+
 Vector search uses an HNSW index over the chunk embeddings. `HNSW_EF_SEARCH`
 (default `100`) controls how widely the index is walked at query time: higher
 values improve recall at some cost in latency. It is automatically raised to at

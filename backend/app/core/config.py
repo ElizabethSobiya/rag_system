@@ -29,6 +29,9 @@ class Settings(BaseSettings):
 
     # Retrieval config
     top_k_chunks: int = 5
+    # Prior exchanges replayed when resolving a follow-up. Older turns are dropped
+    # so a long conversation cannot grow the prompt without bound.
+    max_history_turns: int = 6
     min_chunk_similarity: float = 0.25
     max_chunks_per_document: int = 2
     # Search-time breadth of the HNSW index walk. Raised from pgvector's default
