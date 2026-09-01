@@ -233,7 +233,7 @@ async def get_document_content_endpoint(
         filename=result["filename"],
         file_type=result["file_type"],
         content=result["content"],
-        chunk_count=len(result["chunks"]),
+        chunk_count=result["chunk_count"],
     )
 
 
