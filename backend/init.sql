@@ -1,8 +1,14 @@
 CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Primary keys use the built-in gen_random_uuid() (Postgres 13+) rather than
+-- uuid-ossp's uuid_generate_v4(). Hosted providers install extensions into a
+-- dedicated schema that is not always on a client connection's search_path, so
+-- an extension-provided default can resolve locally and fail in production.
+-- Tables created by earlier versions keep their uuid_generate_v4() default;
+-- that keeps working wherever the extension is already installed.
 
 CREATE TABLE IF NOT EXISTS documents (
-    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     filename    TEXT NOT NULL,
     file_type   TEXT NOT NULL,
     file_size   INTEGER NOT NULL,
@@ -23,7 +29,7 @@ ALTER TABLE documents
     ADD COLUMN IF NOT EXISTS file_data BYTEA;
 
 CREATE TABLE IF NOT EXISTS chunks (
-    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     document_id   UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     chunk_index   INTEGER NOT NULL,
     content       TEXT NOT NULL,
@@ -52,7 +58,7 @@ CREATE INDEX IF NOT EXISTS documents_collection_idx ON documents (collection_nam
 CREATE INDEX IF NOT EXISTS documents_created_at_idx ON documents (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS search_history (
-    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     query           TEXT NOT NULL,
     answer          TEXT NOT NULL,
     citations       JSONB NOT NULL DEFAULT '[]',

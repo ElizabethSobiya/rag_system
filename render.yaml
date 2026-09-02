@@ -1,0 +1,70 @@
+# Render Blueprint: FastAPI backend + static React frontend.
+# Postgres lives in Supabase, so no database is declared here.
+#
+# Both cross-referencing URLs are `sync: false` because each service needs the
+# other's hostname, which Render only assigns at create time. Deploy once, then
+# fill both in and redeploy. See DEPLOY.md.
+
+services:
+  - type: web
+    name: rag-api
+    runtime: docker
+    # dockerfilePath and dockerContext are resolved from the repository root.
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    # Put this in the region closest to your Supabase project: every request
+    # makes several round trips to Postgres.
+    region: oregon
+    # `free` sleeps after 15 minutes idle (~50s cold start) and caps at 512MB,
+    # which is close to this image's working set once PyMuPDF and tiktoken load.
+    # Move to `starter` if you see restarts or out-of-memory in the logs.
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      # Supabase connection string. Must be a POOLER URL, not the direct one:
+      # see DEPLOY.md for why the direct host is unreachable from Render.
+      - key: DATABASE_URL
+        sync: false
+      # JSON array, e.g. ["https://rag-frontend.onrender.com"] — this is parsed
+      # as a list, so a bare hostname will not work.
+      - key: CORS_ORIGINS
+        sync: false
+      # No /docs or /openapi.json in production.
+      - key: DISABLE_OPENAPI
+        value: "true"
+      # Supabase's pooler shares a connection budget across the whole project,
+      # so this instance claims a small slice rather than the local default of
+      # 10 + 20 overflow.
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: DB_MAX_OVERFLOW
+        value: "5"
+
+  - type: web
+    name: rag-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: corepack enable && yarn install --frozen-lockfile && yarn build
+    staticPublishPath: ./dist
+    envVars:
+      # Read by Vite during buildCommand and inlined into the bundle. Changing
+      # it requires a rebuild, not just a restart.
+      - key: VITE_API_BASE_URL
+        sync: false
+    routes:
+      # Single-page app: unknown paths must return index.html, not a 404.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
