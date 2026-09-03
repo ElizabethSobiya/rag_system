@@ -108,16 +108,16 @@ later is recommended.
 
 The backend container deploys to Render and the frontend to Vercel, against a
 Supabase Postgres database. [`render.yaml`](render.yaml) declares the Render
-service and [`vercel.json`](vercel.json) the Vercel build;
+service; Vercel builds `frontend/` from its project settings.
 [DEPLOY.md](DEPLOY.md) is the step-by-step walkthrough.
 
 Two things differ from the local setup and are easy to miss:
 
 - `VITE_API_BASE_URL` is read at **build** time and inlined into the bundle, so
   changing it requires a rebuild rather than a restart.
-- `CORS_ORIGINS` is parsed as a JSON array (`["https://example.com"]`), not a
-  bare hostname, and must list every frontend origin — Vercel preview
-  deployments each get their own hostname.
+- `CORS_ORIGINS` accepts a comma-separated list, a JSON array, or a single
+  origin, and must name every frontend origin — Vercel preview deployments each
+  get their own hostname.
 
 ## Environment variables
 

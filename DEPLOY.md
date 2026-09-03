@@ -2,8 +2,10 @@
 
 Three pieces: a **Supabase** Postgres database, a **Render** Docker web service
 for the FastAPI backend, and a **Vercel** project for the React frontend.
-[`render.yaml`](render.yaml) declares the Render service and
-[`vercel.json`](vercel.json) the Vercel build; Supabase is set up by hand once.
+[`render.yaml`](render.yaml) declares the Render service; Vercel builds the
+frontend from its own project settings, with
+[`frontend/vercel.json`](frontend/vercel.json) adding response headers. Supabase
+is set up by hand once.
 
 Work through the steps in order — step 3 needs the database URL from step 1, and
 step 6 needs hostnames that Render and Vercel only assign once each service has
@@ -51,7 +53,15 @@ transaction pooler does not support prepared statements, which asyncpg uses by
 default; on 6543 you would additionally need to disable asyncpg's statement
 cache. Session mode needs no code change.
 
-You can paste this URL as-is. The app rewrites `postgresql://` to
+**Append `?sslmode=require`.** The URL works without it, but the failure mode is
+worth avoiding. With no `sslmode`, asyncpg defaults to `prefer`: it connects with
+TLS, and if the server rejects *authorization* it assumes TLS was the problem and
+silently retries in plaintext. The pooler refuses plaintext, so a simple wrong
+password surfaces as a confusing second-attempt connection error with the real
+`InvalidPasswordError` nowhere in the traceback. `sslmode=require` skips the
+retry, so authentication failures say so.
+
+You can otherwise paste this URL as-is. The app rewrites `postgresql://` to
 `postgresql+asyncpg://` and translates `sslmode` into the form asyncpg accepts —
 see `normalize_database_url` in
 [`backend/app/core/config.py`](backend/app/core/config.py).
@@ -100,12 +110,19 @@ and deploy from there.
 ## 5. Create the Vercel project (frontend)
 
 1. In [Vercel](https://vercel.com): **Add New → Project**, import `rag_system`.
-2. [`vercel.json`](vercel.json) at the repository root drives the build, so the
-   defaults are correct as imported: it builds inside `frontend/` and publishes
-   `frontend/dist`. Leave the Root Directory as the repository root. Setting Root
-   Directory to `frontend` also works, but then Vercel ignores the root
-   `vercel.json` and you must set the build command and output directory by hand.
-3. **Settings → Environment Variables**, add for *Production* (and *Preview* if
+   Point it at the branch you deploy from — it defaults to `main`, so a fix
+   pushed only to `dev` will not be built.
+2. **Settings → General → Root Directory: `frontend`.** The repository root has
+   no `package.json`, so a build from there fails at the install step before it
+   reaches any frontend code.
+3. Leave **Build & Development Settings** on their defaults, with every override
+   toggled off. Vercel detects Vite inside `frontend/` and derives
+   `yarn install` / `yarn build` / `dist` on its own; a stale Build or Install
+   Command override saved on the project silently wins over that detection and
+   is worth checking first when a build fails.
+   [`frontend/vercel.json`](frontend/vercel.json) only adds response headers — it
+   deliberately sets no build fields, so there is one source of truth.
+4. **Settings → Environment Variables**, add for *Production* (and *Preview* if
    you want preview deployments to reach the API):
 
    ```
@@ -116,7 +133,7 @@ and deploy from there.
    itself. This is the only variable the frontend reads; it is the sole
    `import.meta.env` reference in the source.
 
-4. **Deployments → Redeploy.** Vite inlines this value into the JavaScript bundle
+5. **Deployments → Redeploy.** Vite inlines this value into the JavaScript bundle
    at build time, so any build that ran before the variable existed still has the
    `http://localhost:8000` fallback from
    [`frontend/src/App.tsx`](frontend/src/App.tsx) baked in. A redeploy is
@@ -124,16 +141,16 @@ and deploy from there.
 
 ## 6. Let the API accept the frontend's origin
 
-**`rag-api` → Environment**, set `CORS_ORIGINS` to a **JSON array** holding the
-Vercel production URL:
+**`rag-api` → Environment**, set `CORS_ORIGINS` to the Vercel production URL:
 
 ```
-["https://rag-system.vercel.app"]
+https://rag-system.vercel.app
 ```
 
-The brackets and quotes are required — the setting is typed as a list, and a bare
-hostname will fail to parse at startup. No trailing slash. Then **Manual Deploy →
-Deploy latest commit**; the value is read once at startup.
+Several origins are comma-separated; a JSON array works too. Trailing slashes are
+stripped for you, since one would otherwise never match the `Origin` header a
+browser sends. Then **Manual Deploy → Deploy latest commit**; the value is read
+once at startup.
 
 ## 7. Verify
 
@@ -173,9 +190,9 @@ then fails every API call in the browser console. Add the preview origins you
 care about to the array, or test against the production URL.
 
 **`frontend/Dockerfile` and `frontend/nginx.conf` are not used in production.**
-They serve the frontend under `docker-compose` for local work. Vercel builds from
-[`vercel.json`](vercel.json) and serves the static output directly, so editing
-the nginx config changes nothing about the deployed site.
+They serve the frontend under `docker-compose` for local work. Vercel runs Vite
+and serves the static output directly, so editing the nginx config changes
+nothing about the deployed site.
 
 **Memory.** The free plan caps at 512MB, and PyMuPDF plus tiktoken put this image
 near that ceiling. If the logs show the service restarting during uploads, that is
@@ -213,9 +230,11 @@ the URL public.
 | Symptom | Cause |
 | --- | --- |
 | API logs a network timeout connecting to Postgres | Using the direct connection string (IPv6-only) instead of the pooler. Back to step 2. |
+| Traceback ends in `asyncpg/connect_utils.py` at `await connected`, with no error class named | An authentication failure masked by asyncpg's `sslmode=prefer` plaintext retry. The credentials are wrong, not the network — TLS had already completed. Check that the user keeps its `.<project-ref>` suffix and that the password is percent-encoded, and add `?sslmode=require` to see the real error. |
 | `TypeError: connect() got an unexpected keyword argument 'sslmode'` | A `DATABASE_URL` that bypassed normalization. Confirm it starts with `postgresql://` or `postgresql+asyncpg://`. |
 | `prepared statement "__asyncpg_stmt_x__" does not exist` | You are on the transaction pooler (port 6543). Switch to session pooler on 5432. |
-| Browser console: blocked by CORS policy | `CORS_ORIGINS` is not a JSON array, has a trailing slash, omits the Vercel origin, or the API was not redeployed after the change. A preview deployment hits this because its hostname is not in the list. |
+| Browser console: blocked by CORS policy | `CORS_ORIGINS` omits the origin the browser is actually sending, or the API was not redeployed after the change. A preview deployment hits this because its hostname is not in the list. |
+| API exits at boot with `SettingsError: error parsing value for field "cors_origins"` | A `CORS_ORIGINS` starting with `[` is read as JSON and must use double quotes. Drop the brackets and give a comma-separated list instead. |
 | Frontend requests go to `localhost:8000` | The Vercel build predates `VITE_API_BASE_URL`. Redeploy so Vite re-inlines the value; there is nothing to restart. |
 | `type "vector" does not exist` when applying the schema | pgvector was not enabled, or it was installed into a schema that is not on the connection's `search_path`. Step 1.2. |
 | Uploads succeed, queries return nothing | Documents may still be processing, or `MIN_CHUNK_SIMILARITY` is filtering everything out. Check document status in the UI first. |

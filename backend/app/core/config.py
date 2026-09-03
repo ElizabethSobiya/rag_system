@@ -1,7 +1,8 @@
+import json
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -71,6 +72,36 @@ def normalize_database_url(url: str) -> str:
     )
 
 
+# A dashboard env var is a bare string, but pydantic-settings decodes any field
+# typed as a list by running json.loads over it first — and it does that inside
+# the settings source, before validators run, so a malformed value takes the
+# process down at import with a SettingsError rather than surfacing as a bad
+# request. Typing the field as a string moves the parsing here, where a
+# comma-separated list and a single bare origin are both accepted.
+def parse_cors_origins(value: str) -> list[str]:
+    """Parse CORS_ORIGINS from a JSON array, a comma-separated list, or one origin."""
+    text = value.strip()
+    if not text:
+        return []
+
+    if text.startswith("["):
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"CORS_ORIGINS starts with '[' so it is read as a JSON array, "
+                f"but it does not parse: {exc}. Note that JSON requires double "
+                f"quotes around each origin."
+            ) from exc
+        items = [str(item) for item in decoded]
+    else:
+        items = text.split(",")
+
+    # A trailing slash makes an origin compare unequal to the Origin header the
+    # browser actually sends, which reads as CORS being misconfigured entirely.
+    return [origin for origin in (item.strip().rstrip("/") for item in items) if origin]
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         # Supports `docker compose` and local commands launched from either the
@@ -110,8 +141,12 @@ class Settings(BaseSettings):
     # of 40 so the candidate pool is not truncated by the index itself.
     hnsw_ef_search: int = 100
 
-    # CORS
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    # CORS. Read as a string and parsed by `cors_origins` below; see
+    # parse_cors_origins for why this is not typed as a list.
+    cors_origins_raw: str = Field(
+        default="http://localhost:5173,http://localhost:3000",
+        validation_alias=AliasChoices("CORS_ORIGINS", "cors_origins_raw"),
+    )
 
     # When True, disables /docs and /redoc to reduce attack surface
     disable_openapi: bool = False
@@ -120,6 +155,10 @@ class Settings(BaseSettings):
     @classmethod
     def _normalize_database_url(cls, value: str) -> str:
         return normalize_database_url(value)
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return parse_cors_origins(self.cors_origins_raw)
 
 
 settings = Settings()

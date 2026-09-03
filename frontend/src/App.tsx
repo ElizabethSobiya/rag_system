@@ -132,6 +132,9 @@ export default function App() {
   const [previewContent, setPreviewContent] = useState<{ filename: string; file_type: string; content: string } | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [searchFilter, setSearchFilter] = useState('')
+  // Below 1000px the library cannot sit beside the chat, so it becomes a drawer.
+  // Without this it was simply hidden, leaving no way to upload on a tablet or phone.
+  const [libraryOpen, setLibraryOpen] = useState(false)
   const streamRenderFrame = useRef<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
@@ -368,14 +371,19 @@ export default function App() {
     setActiveView('workspace')
   }
 
-  return <main className={dark ? 'app dark' : 'app'}>
+  const shellClass = ['app', dark && 'dark', libraryOpen && 'library-open']
+    .filter(Boolean)
+    .join(' ')
+
+  return <main className={shellClass}>
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">◇</span><span>TraceRAG</span></div>
       <button className="new-chat" onClick={clearMessages}>＋ New investigation</button>
       <nav><button className={activeView === 'workspace' ? 'nav-active' : ''} onClick={() => setActiveView('workspace')}>▣ Evidence workspace</button><button className={activeView === 'history' ? 'nav-active' : ''} onClick={() => setActiveView('history')}>⏱ Query history</button><button onClick={toggleInspector}>⌘ Retrieval lab</button></nav>
       <div className="sidebar-bottom"><button onClick={toggleDark}>{dark ? '☀ Light theme' : '◐ Dark theme'}</button><span>Grounded answers, inspectable evidence.</span></div>
     </aside>
-    <section className="library">
+    <section className="library" id="knowledge-base">
+      <button className="library-close" onClick={() => setLibraryOpen(false)} aria-label="Close knowledge base">✕</button>
       {activeView === 'history' ? <>
         <header><div><p className="eyebrow">SEARCH HISTORY</p><h1>Past queries</h1></div><button className="refresh" onClick={() => historyQuery.refetch()}>↻ Refresh</button></header>
         <div className="history-list">
@@ -416,8 +424,19 @@ export default function App() {
         <div className="documents">{visibleDocs.length === 0 ? <p className="empty">Add a source to begin investigating.</p> : visibleDocs.map(doc => <DocumentItem key={doc.id} doc={doc} selected={selectedIds.includes(doc.id)} onToggle={toggleDocSelection} onDelete={removeDocument} onPreview={openPreview} onDownload={downloadDocument} />)}</div>
       </>}
     </section>
+    {libraryOpen && <button
+      className="library-backdrop"
+      onClick={() => setLibraryOpen(false)}
+      aria-label="Close knowledge base"
+      tabIndex={-1}
+    />}
     <section className="chat">
-      <header><div><p className="eyebrow">RESEARCH CONSOLE</p><h2>Ask your evidence</h2></div><div className="chat-actions">{messages.length > 0 && <button className="export-btn" onClick={exportConversation} title="Export conversation">↗ Export</button>}<span className="scope">{selectedIds.length ? `${selectedIds.length} selected sources` : filterCollection}</span></div></header>
+      <header><button
+        className="library-toggle"
+        onClick={() => setLibraryOpen(open => !open)}
+        aria-expanded={libraryOpen}
+        aria-controls="knowledge-base"
+      >☰ Sources{documents.length > 0 ? ` (${documents.length})` : ''}</button><div><p className="eyebrow">RESEARCH CONSOLE</p><h2>Ask your evidence</h2></div><div className="chat-actions">{messages.length > 0 && <button className="export-btn" onClick={exportConversation} title="Export conversation">↗ Export</button>}<span className="scope">{selectedIds.length ? `${selectedIds.length} selected sources` : filterCollection}</span></div></header>
       <div className="messages">{messages.length === 0 && <div className="welcome"><span>✦</span><h3>Turn documents into defensible answers.</h3><p>Ask a question, open every source, and inspect how retrieval chose its evidence.</p><div className="suggestions"><button onClick={() => setQuestion('What are the main conclusions across these documents?')}>Summarize the conclusions</button><button onClick={() => setQuestion('Where do these documents disagree?')}>Find disagreements</button></div></div>}
       {messages.map(message => <MessageItem key={message.id} message={message} showInspector={showInspector} onCitationClick={handleCitationClick} />)}{loading && <article className="message assistant"><div className="avatar">◇</div><div className="typing"><i></i><i></i><i></i> Retrieving evidence…</div></article>}<div ref={messagesEndRef} /></div>
       <form className="composer" onSubmit={ask}><textarea value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(e) } }} placeholder="Ask a question about your evidence…" rows={2}/><button type="submit" disabled={loading || !question.trim()}>Send ↑</button><small>Press Enter to send · Shift + Enter for new line</small></form>
