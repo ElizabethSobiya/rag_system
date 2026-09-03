@@ -53,7 +53,15 @@ transaction pooler does not support prepared statements, which asyncpg uses by
 default; on 6543 you would additionally need to disable asyncpg's statement
 cache. Session mode needs no code change.
 
-You can paste this URL as-is. The app rewrites `postgresql://` to
+**Append `?sslmode=require`.** The URL works without it, but the failure mode is
+worth avoiding. With no `sslmode`, asyncpg defaults to `prefer`: it connects with
+TLS, and if the server rejects *authorization* it assumes TLS was the problem and
+silently retries in plaintext. The pooler refuses plaintext, so a simple wrong
+password surfaces as a confusing second-attempt connection error with the real
+`InvalidPasswordError` nowhere in the traceback. `sslmode=require` skips the
+retry, so authentication failures say so.
+
+You can otherwise paste this URL as-is. The app rewrites `postgresql://` to
 `postgresql+asyncpg://` and translates `sslmode` into the form asyncpg accepts —
 see `normalize_database_url` in
 [`backend/app/core/config.py`](backend/app/core/config.py).
@@ -222,6 +230,7 @@ the URL public.
 | Symptom | Cause |
 | --- | --- |
 | API logs a network timeout connecting to Postgres | Using the direct connection string (IPv6-only) instead of the pooler. Back to step 2. |
+| Traceback ends in `asyncpg/connect_utils.py` at `await connected`, with no error class named | An authentication failure masked by asyncpg's `sslmode=prefer` plaintext retry. The credentials are wrong, not the network — TLS had already completed. Check that the user keeps its `.<project-ref>` suffix and that the password is percent-encoded, and add `?sslmode=require` to see the real error. |
 | `TypeError: connect() got an unexpected keyword argument 'sslmode'` | A `DATABASE_URL` that bypassed normalization. Confirm it starts with `postgresql://` or `postgresql+asyncpg://`. |
 | `prepared statement "__asyncpg_stmt_x__" does not exist` | You are on the transaction pooler (port 6543). Switch to session pooler on 5432. |
 | Browser console: blocked by CORS policy | `CORS_ORIGINS` omits the origin the browser is actually sending, or the API was not redeployed after the change. A preview deployment hits this because its hostname is not in the list. |
