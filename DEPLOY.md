@@ -133,16 +133,16 @@ and deploy from there.
 
 ## 6. Let the API accept the frontend's origin
 
-**`rag-api` → Environment**, set `CORS_ORIGINS` to a **JSON array** holding the
-Vercel production URL:
+**`rag-api` → Environment**, set `CORS_ORIGINS` to the Vercel production URL:
 
 ```
-["https://rag-system.vercel.app"]
+https://rag-system.vercel.app
 ```
 
-The brackets and quotes are required — the setting is typed as a list, and a bare
-hostname will fail to parse at startup. No trailing slash. Then **Manual Deploy →
-Deploy latest commit**; the value is read once at startup.
+Several origins are comma-separated; a JSON array works too. Trailing slashes are
+stripped for you, since one would otherwise never match the `Origin` header a
+browser sends. Then **Manual Deploy → Deploy latest commit**; the value is read
+once at startup.
 
 ## 7. Verify
 
@@ -224,7 +224,8 @@ the URL public.
 | API logs a network timeout connecting to Postgres | Using the direct connection string (IPv6-only) instead of the pooler. Back to step 2. |
 | `TypeError: connect() got an unexpected keyword argument 'sslmode'` | A `DATABASE_URL` that bypassed normalization. Confirm it starts with `postgresql://` or `postgresql+asyncpg://`. |
 | `prepared statement "__asyncpg_stmt_x__" does not exist` | You are on the transaction pooler (port 6543). Switch to session pooler on 5432. |
-| Browser console: blocked by CORS policy | `CORS_ORIGINS` is not a JSON array, has a trailing slash, omits the Vercel origin, or the API was not redeployed after the change. A preview deployment hits this because its hostname is not in the list. |
+| Browser console: blocked by CORS policy | `CORS_ORIGINS` omits the origin the browser is actually sending, or the API was not redeployed after the change. A preview deployment hits this because its hostname is not in the list. |
+| API exits at boot with `SettingsError: error parsing value for field "cors_origins"` | A `CORS_ORIGINS` starting with `[` is read as JSON and must use double quotes. Drop the brackets and give a comma-separated list instead. |
 | Frontend requests go to `localhost:8000` | The Vercel build predates `VITE_API_BASE_URL`. Redeploy so Vite re-inlines the value; there is nothing to restart. |
 | `type "vector" does not exist` when applying the schema | pgvector was not enabled, or it was installed into a schema that is not on the connection's `search_path`. Step 1.2. |
 | Uploads succeed, queries return nothing | Documents may still be processing, or `MIN_CHUNK_SIMILARITY` is filtering everything out. Check document status in the UI first. |

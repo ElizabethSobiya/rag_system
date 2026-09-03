@@ -29,10 +29,10 @@ services:
       # see DEPLOY.md for why the direct host is unreachable from Render.
       - key: DATABASE_URL
         sync: false
-      # JSON array of the frontend's Vercel origins, e.g.
-      # ["https://rag-system.vercel.app"] — this is parsed as a list, so a bare
-      # hostname will not work. Vercel gives every preview deployment its own
-      # hostname; each one that needs API access has to be listed here too.
+      # The frontend's Vercel origins, comma-separated, e.g.
+      # https://rag-system.vercel.app — a JSON array is also accepted. Vercel
+      # gives every preview deployment its own hostname; each one that needs API
+      # access has to be listed here too.
       - key: CORS_ORIGINS
         sync: false
       # No /docs or /openapi.json in production.
