@@ -1,0 +1,47 @@
+# Render Blueprint: the FastAPI backend only.
+#
+# Postgres lives in Supabase and the React frontend is deployed on Vercel, so
+# neither is declared here. See DEPLOY.md.
+#
+# CORS_ORIGINS is `sync: false` because it needs the frontend's hostname, which
+# does not exist until Vercel has built the project once. Deploy the API first,
+# then the frontend, then come back and fill it in.
+
+services:
+  - type: web
+    name: rag-api
+    runtime: docker
+    # dockerfilePath and dockerContext are resolved from the repository root.
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    # Put this in the region closest to your Supabase project: every request
+    # makes several round trips to Postgres.
+    region: oregon
+    # `free` sleeps after 15 minutes idle (~50s cold start) and caps at 512MB,
+    # which is close to this image's working set once PyMuPDF and tiktoken load.
+    # Move to `starter` if you see restarts or out-of-memory in the logs.
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      # Supabase connection string. Must be a POOLER URL, not the direct one:
+      # see DEPLOY.md for why the direct host is unreachable from Render.
+      - key: DATABASE_URL
+        sync: false
+      # JSON array of the frontend's Vercel origins, e.g.
+      # ["https://rag-system.vercel.app"] — this is parsed as a list, so a bare
+      # hostname will not work. Vercel gives every preview deployment its own
+      # hostname; each one that needs API access has to be listed here too.
+      - key: CORS_ORIGINS
+        sync: false
+      # No /docs or /openapi.json in production.
+      - key: DISABLE_OPENAPI
+        value: "true"
+      # Supabase's pooler shares a connection budget across the whole project,
+      # so this instance claims a small slice rather than the local default of
+      # 10 + 20 overflow.
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: DB_MAX_OVERFLOW
+        value: "5"

@@ -19,6 +19,8 @@ retrieved chunks.
 ├── backend/            # FastAPI app (API, services, models)
 ├── frontend/           # React + Vite app
 ├── docker-compose.yml  # Complete local stack
+├── render.yaml         # Render Blueprint (deployment)
+├── DEPLOY.md           # Deployment walkthrough
 └── .env.example        # Copy to .env and fill in
 ```
 
@@ -75,6 +77,21 @@ To keep answers grounded across multiple sources, retrieval prefers at most
 backfilling unused result slots. Queries can override this with the optional
 `max_chunks_per_document` field.
 
+Follow-up questions are supported. Callers may send prior exchanges as the
+optional `history` field (a list of `{question, answer}` turns); the frontend sends
+the current conversation automatically. Because a follow-up like "what about the
+second one?" is a poor search query on its own, it is first rewritten into a
+standalone question, and that rewrite is what gets embedded and searched. The
+rewrite is returned as `search_query` on the response so it stays inspectable, and
+any failure falls back to the question as asked. `MAX_HISTORY_TURNS` (default `6`)
+bounds how many past exchanges are replayed.
+
+Vector search uses an HNSW index over the chunk embeddings. `HNSW_EF_SEARCH`
+(default `100`) controls how widely the index is walked at query time: higher
+values improve recall at some cost in latency. It is automatically raised to at
+least the size of the candidate pool a query requests, because pgvector returns
+fewer rows than asked for when `ef_search` is below the row limit.
+
 #### Frontend
 
 ```bash
@@ -86,6 +103,21 @@ yarn dev
 The app runs at http://localhost:5173. Use Yarn for this project; its committed
 `yarn.lock` guarantees the dependency versions used by the app. Node.js 20 or
 later is recommended.
+
+## Deployment
+
+The backend container deploys to Render and the frontend to Vercel, against a
+Supabase Postgres database. [`render.yaml`](render.yaml) declares the Render
+service and [`vercel.json`](vercel.json) the Vercel build;
+[DEPLOY.md](DEPLOY.md) is the step-by-step walkthrough.
+
+Two things differ from the local setup and are easy to miss:
+
+- `VITE_API_BASE_URL` is read at **build** time and inlined into the bundle, so
+  changing it requires a rebuild rather than a restart.
+- `CORS_ORIGINS` is parsed as a JSON array (`["https://example.com"]`), not a
+  bare hostname, and must list every frontend origin — Vercel preview
+  deployments each get their own hostname.
 
 ## Environment variables
 

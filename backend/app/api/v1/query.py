@@ -2,15 +2,17 @@
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import AsyncSessionLocal, get_db
+from app.middleware.rate_limit import query_limiter
+from app.models.document import SearchHistory
 from app.schemas.query import QueryRequest, QueryResponse
 from app.services.embedder import embed_query
-from app.services.llm import generate_answer, generate_answer_stream
+from app.services.llm import condense_question, generate_answer, generate_answer_stream
 from app.services.vector_store import search_similar_chunks
 
 router = APIRouter(prefix="/query", tags=["query"])
@@ -47,13 +49,18 @@ def _select_diverse_chunks(
     return selected[:top_k]
 
 
-async def _get_chunks(request: QueryRequest, db: AsyncSession) -> list[dict]:
-    query_embedding = await embed_query(request.query)
+async def _get_chunks(
+    request: QueryRequest, db: AsyncSession
+) -> tuple[list[dict], str]:
+    """Retrieve grounding chunks, resolving a follow-up against the conversation first."""
+    history = [turn.model_dump() for turn in request.history]
+    search_query = await condense_question(request.query, history)
+    query_embedding = await embed_query(search_query)
     top_k = request.top_k or settings.top_k_chunks
     chunks = await search_similar_chunks(
         db,
         query_embedding=query_embedding,
-        query=request.query,
+        query=search_query,
         # Retrieve extra candidates so the diversity pass has alternatives.
         top_k=top_k * 2,
         document_ids=request.document_ids,
@@ -85,10 +92,13 @@ async def _get_chunks(request: QueryRequest, db: AsyncSession) -> list[dict]:
         if request.max_chunks_per_document is not None
         else settings.max_chunks_per_document
     )
-    return _select_diverse_chunks(
-        relevant_chunks,
-        top_k=top_k,
-        max_per_document=max_per_document,
+    return (
+        _select_diverse_chunks(
+            relevant_chunks,
+            top_k=top_k,
+            max_per_document=max_per_document,
+        ),
+        search_query,
     )
 
 
@@ -115,16 +125,49 @@ def _evidence_metadata(chunks: list[dict]) -> tuple[float, str, list[dict]]:
     return confidence, status, debug
 
 
+async def _save_history(
+    db: AsyncSession,
+    query: str,
+    answer: str,
+    citations: list[dict],
+    confidence: float,
+    evidence_status: str,
+    collection_name: str | None,
+) -> None:
+    try:
+        entry = SearchHistory(
+            query=query,
+            answer=answer,
+            citations=citations,
+            confidence=confidence,
+            evidence_status=evidence_status,
+            collection_name=collection_name,
+        )
+        db.add(entry)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+
+
 @router.post("/", response_model=QueryResponse)
 async def query_documents(
+    http_request: Request,
     request: QueryRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    chunks = await _get_chunks(request, db)
-    result = await generate_answer(request.query, chunks)
+    query_limiter.check(http_request)
+    chunks, search_query = await _get_chunks(request, db)
+    history = [turn.model_dump() for turn in request.history]
+    result = await generate_answer(request.query, chunks, history=history)
     confidence, evidence_status, debug = _evidence_metadata(chunks)
+    await _save_history(
+        db, request.query, result["answer"],
+        [c.model_dump() if hasattr(c, "model_dump") else c for c in result["citations"]],
+        confidence, evidence_status, request.collection_name,
+    )
     return QueryResponse(
         query=request.query,
+        search_query=search_query,
         answer=result["answer"],
         citations=result["citations"],
         confidence=confidence,
@@ -135,21 +178,39 @@ async def query_documents(
 
 @router.post("/stream")
 async def stream_query_documents(
+    http_request: Request,
     request: QueryRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Return token-by-token grounded answers as server-sent events."""
-    chunks = await _get_chunks(request, db)
+    query_limiter.check(http_request)
+    chunks, search_query = await _get_chunks(request, db)
+    history = [turn.model_dump() for turn in request.history]
     confidence, evidence_status, debug = _evidence_metadata(chunks)
 
     async def event_stream():
-        async for event in generate_answer_stream(request.query, chunks):
+        full_answer = ""
+        final_citations: list[dict] = []
+        async for event in generate_answer_stream(
+            request.query, chunks, history=history
+        ):
+            if event["type"] == "delta":
+                full_answer += event.get("text", "")
             if event["type"] == "complete":
+                full_answer = event.get("answer", full_answer)
+                final_citations = event.get("citations", [])
                 event.update(
                     confidence=confidence,
                     evidence_status=evidence_status,
                     retrieval_debug=debug,
+                    search_query=search_query,
                 )
             yield f"data: {json.dumps(event)}\n\n"
+        async with AsyncSessionLocal() as history_db:
+            await _save_history(
+                history_db, request.query, full_answer,
+                final_citations, confidence, evidence_status,
+                request.collection_name,
+            )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

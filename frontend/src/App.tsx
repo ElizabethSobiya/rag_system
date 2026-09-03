@@ -9,10 +9,11 @@ type Document = { id: string; filename: string; file_type: string; file_size: nu
 type Citation = { index: number; filename: string; page_number?: number; excerpt: string; similarity: number; referenced: boolean }
 type Answer = { answer: string; citations: Citation[]; confidence: number; evidence_status: string; retrieval_debug: Array<{ filename: string; page_number?: number; similarity: number; semantic_rank?: number; lexical_rank?: number; fusion_score: number }> }
 type Message = { id: string; role: 'user' | 'assistant'; text: string; result?: Answer }
+type HistoryEntry = { id: string; query: string; answer: string; citations: Citation[]; confidence: number; evidence_status: string; collection_name: string | null; created_at: string }
 
 const fileIcon = (type: string) => type === 'pdf' ? 'PDF' : type === 'docx' ? 'DOC' : type.toUpperCase()
 const statusLabel: Record<string, string> = { strongly_supported: 'Strong evidence', partially_supported: 'Partial evidence', insufficient_evidence: 'Needs more evidence' }
-const ACCEPTED_EXTENSIONS = new Set(['pdf', 'docx', 'html', 'htm', 'txt', 'md'])
+const ACCEPTED_EXTENSIONS = new Set(['pdf', 'docx', 'html', 'htm', 'txt', 'md', 'csv', 'xlsx'])
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -23,25 +24,55 @@ function formatFileSize(bytes: number): string {
 let messageIdCounter = 0
 function nextMessageId() { return `msg-${++messageIdCounter}` }
 
-const DocumentItem = memo(function DocumentItem({ doc, selected, onToggle, onDelete }: { doc: Document; selected: boolean; onToggle: (id: string) => void; onDelete: (id: string) => void }) {
+// Prior exchanges sent with a question so the backend can resolve follow-ups like
+// "what about the second one?". Only completed pairs are included; the backend caps
+// how many turns it replays, and answer length is bounded by its schema.
+const MAX_SENT_TURNS = 6
+const MAX_SENT_ANSWER_CHARS = 8000
+function conversationHistory(messages: Message[]) {
+  const turns: Array<{ question: string; answer: string }> = []
+  for (let i = 0; i < messages.length - 1; i++) {
+    const question = messages[i]
+    const answer = messages[i + 1]
+    if (question.role !== 'user' || answer.role !== 'assistant') continue
+    if (!question.text.trim() || !answer.text.trim()) continue
+    turns.push({ question: question.text, answer: answer.text.slice(0, MAX_SENT_ANSWER_CHARS) })
+  }
+  return turns.slice(-MAX_SENT_TURNS)
+}
+
+const DocumentItem = memo(function DocumentItem({ doc, selected, onToggle, onDelete, onPreview, onDownload }: { doc: Document; selected: boolean; onToggle: (id: string) => void; onDelete: (id: string) => void; onPreview: (id: string) => void; onDownload: (id: string, filename: string) => void }) {
   return (
     <article className="document">
       <input aria-label={`Select ${doc.filename}`} type="checkbox" checked={selected} onChange={() => onToggle(doc.id)}/>
       <span className="file-type">{fileIcon(doc.file_type)}</span>
-      <div><strong>{doc.filename}</strong><p>{doc.collection_name} · {formatFileSize(doc.file_size)} · {doc.chunk_count} chunks</p>{doc.error_msg && <small>{doc.error_msg}</small>}</div>
+      <div><strong className="doc-preview-link" onClick={() => doc.status === 'ready' && onPreview(doc.id)} style={{ cursor: doc.status === 'ready' ? 'pointer' : 'default' }}>{doc.filename}</strong><p>{doc.collection_name} · {formatFileSize(doc.file_size)} · {doc.chunk_count} chunks</p>{doc.error_msg && <small>{doc.error_msg}</small>}</div>
       <span className={`doc-status ${doc.status}`}>{doc.status}</span>
+      <button className="download" onClick={() => onDownload(doc.id, doc.filename)} aria-label={`Download ${doc.filename}`} title="Download">↓</button>
       <button className="delete" onClick={() => onDelete(doc.id)} aria-label={`Delete ${doc.filename}`}>×</button>
     </article>
   )
 })
 
 const MessageItem = memo(function MessageItem({ message, showInspector, onCitationClick }: { message: Message; showInspector: boolean; onCitationClick: (c: Citation) => void }) {
+  const [copied, setCopied] = useState(false)
   const referencedCitations = useMemo(() => message.result?.citations.filter(c => c.referenced) ?? [], [message.result])
+  const copyToClipboard = useCallback(() => {
+    navigator.clipboard.writeText(message.text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }, [message.text])
   return (
     <article className={`message ${message.role}`}>
       <div className="avatar">{message.role === 'user' ? 'You' : '◇'}</div>
       <div className="message-body">
         <p>{message.text}</p>
+        {message.role === 'assistant' && message.text && (
+          <button className="copy-btn" onClick={copyToClipboard} title={copied ? 'Copied!' : 'Copy to clipboard'}>
+            {copied ? '✓ Copied' : '⧉ Copy'}
+          </button>
+        )}
         {message.result && <>
           <div className={`evidence-status ${message.result.evidence_status}`}>
             <span>{statusLabel[message.result.evidence_status]}</span>
@@ -59,6 +90,26 @@ const MessageItem = memo(function MessageItem({ message, showInspector, onCitati
   )
 })
 
+function renderPreviewContent(content: string, fileType: string) {
+  if (fileType === 'csv' || fileType === 'xlsx') {
+    const lines = content.split('\n').filter(l => l.trim())
+    if (lines.length === 0) return <p className="empty">No content</p>
+    const rows = lines.map(line => line.split(/\t|,(?=(?:[^"]*"[^"]*")*[^"]*$)/))
+    return (
+      <div className="preview-table-wrap">
+        <table className="preview-table">
+          <thead><tr>{rows[0]?.map((cell, i) => <th key={i}>{cell.trim()}</th>)}</tr></thead>
+          <tbody>{rows.slice(1).map((row, ri) => <tr key={ri}>{row.map((cell, ci) => <td key={ci}>{cell.trim()}</td>)}</tr>)}</tbody>
+        </table>
+      </div>
+    )
+  }
+  if (['md', 'html', 'htm'].includes(fileType)) {
+    return <pre className="preview-code">{content}</pre>
+  }
+  return <pre className="preview-text">{content}</pre>
+}
+
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [question, setQuestion] = useState('')
@@ -68,11 +119,22 @@ export default function App() {
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [dark, setDark] = useState(false)
+  const [dark, setDark] = useState(() => {
+    const stored = localStorage.getItem('theme')
+    if (stored) return stored === 'dark'
+    return window.matchMedia('(prefers-color-scheme: dark)').matches
+  })
+  useEffect(() => { localStorage.setItem('theme', dark ? 'dark' : 'light') }, [dark])
   const [showInspector, setShowInspector] = useState(false)
+  const [activeView, setActiveView] = useState<'workspace' | 'history'>('workspace')
   const [activeCitation, setActiveCitation] = useState<Citation | null>(null)
+  const [previewDocId, setPreviewDocId] = useState<string | null>(null)
+  const [previewContent, setPreviewContent] = useState<{ filename: string; file_type: string; content: string } | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [searchFilter, setSearchFilter] = useState('')
   const streamRenderFrame = useRef<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const queryClient = useQueryClient()
   const documentsQuery = useQuery({
     queryKey: ['documents'],
@@ -86,12 +148,41 @@ export default function App() {
   const documents = documentsQuery.data ?? []
 
   const collections = useMemo(() => [...new Set(documents.map(d => d.collection_name))], [documents])
-  const visibleDocs = useMemo(() => filterCollection === 'All collections' ? documents : documents.filter(d => d.collection_name === filterCollection), [documents, filterCollection])
+  const visibleDocs = useMemo(() => {
+    let filtered = filterCollection === 'All collections' ? documents : documents.filter(d => d.collection_name === filterCollection)
+    if (searchFilter.trim()) {
+      const term = searchFilter.trim().toLowerCase()
+      filtered = filtered.filter(d => d.filename.toLowerCase().includes(term))
+    }
+    return filtered
+  }, [documents, filterCollection, searchFilter])
+
+  const libraryStats = useMemo(() => ({
+    totalDocs: documents.length,
+    totalSize: documents.reduce((sum, d) => sum + d.file_size, 0),
+    collectionCount: collections.length,
+    readyCount: documents.filter(d => d.status === 'ready').length,
+  }), [documents, collections])
 
   useEffect(() => () => {
     if (streamRenderFrame.current) cancelAnimationFrame(streamRenderFrame.current)
     abortControllerRef.current?.abort()
   }, [])
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (activeCitation) closeCitation()
+        else if (previewDocId) closePreview()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [activeCitation, previewDocId])
 
   const uploadMutation = useMutation({
     mutationFn: async (files: File[]) => Promise.all(files.map(async file => {
@@ -113,6 +204,38 @@ export default function App() {
       setSelectedIds(ids => ids.filter(selectedId => selectedId !== id))
       queryClient.invalidateQueries({ queryKey: ['documents'] })
     },
+  })
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const response = await fetch(`${API}/api/v1/documents/bulk-delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ document_ids: ids }),
+      })
+      if (!response.ok) throw new Error((await response.json()).detail ?? 'Bulk delete failed.')
+      return response.json()
+    },
+    onSuccess: () => {
+      setSelectedIds([])
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
+    },
+  })
+
+  const historyQuery = useQuery({
+    queryKey: ['history'],
+    queryFn: async (): Promise<{ items: HistoryEntry[]; total: number }> => {
+      const res = await fetch(`${API}/api/v1/history/?limit=50`)
+      if (!res.ok) throw new Error('Failed to load history')
+      return res.json()
+    },
+  })
+  const deleteHistoryMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`${API}/api/v1/history/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete')
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['history'] }),
   })
 
   async function uploadFiles(files: FileList | File[]) {
@@ -142,9 +265,71 @@ export default function App() {
     try { await deleteMutation.mutateAsync(id) } catch (e) { setError(e instanceof Error ? e.message : 'Unable to delete this document.') }
   }, [deleteMutation])
 
+  const downloadDocument = useCallback(async (id: string, filename: string) => {
+    try {
+      const res = await fetch(`${API}/api/v1/documents/${id}/download`)
+      if (!res.ok) { const data = await res.json(); throw new Error(data.detail ?? 'Download failed.') }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = filename; document.body.appendChild(a); a.click()
+      document.body.removeChild(a); URL.revokeObjectURL(url)
+    } catch (e) { setError(e instanceof Error ? e.message : 'Download failed.') }
+  }, [])
+
+  const bulkDelete = useCallback(async () => {
+    if (!selectedIds.length) return
+    if (!confirm(`Delete ${selectedIds.length} document${selectedIds.length === 1 ? '' : 's'}? This cannot be undone.`)) return
+    try { await bulkDeleteMutation.mutateAsync(selectedIds) } catch (e) { setError(e instanceof Error ? e.message : 'Bulk delete failed.') }
+  }, [selectedIds, bulkDeleteMutation])
+
+  const selectAllVisible = useCallback(() => {
+    const allVisibleIds = visibleDocs.map(d => d.id)
+    const allSelected = allVisibleIds.every(id => selectedIds.includes(id))
+    setSelectedIds(allSelected ? selectedIds.filter(id => !allVisibleIds.includes(id)) : [...new Set([...selectedIds, ...allVisibleIds])])
+  }, [visibleDocs, selectedIds])
+
   const handleCitationClick = useCallback((c: Citation) => setActiveCitation(c), [])
   const closeCitation = useCallback(() => setActiveCitation(null), [])
   const clearMessages = useCallback(() => setMessages([]), [])
+
+  const exportConversation = useCallback(() => {
+    if (!messages.length) return
+    const lines = messages.map(m => {
+      const prefix = m.role === 'user' ? 'You' : 'TraceRAG'
+      let text = `${prefix}: ${m.text}`
+      if (m.result) {
+        text += `\n  Confidence: ${Math.round(m.result.confidence * 100)}%`
+        text += `\n  Evidence: ${statusLabel[m.result.evidence_status] ?? m.result.evidence_status}`
+        const refs = m.result.citations.filter(c => c.referenced)
+        if (refs.length) text += `\n  Sources: ${refs.map(c => `${c.filename}${c.page_number ? ` p.${c.page_number}` : ''}`).join(', ')}`
+      }
+      return text
+    }).join('\n\n')
+    const blob = new Blob([`TraceRAG Conversation Export\n${'='.repeat(40)}\n\n${lines}\n`], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `tracerag-export-${new Date().toISOString().slice(0, 10)}.txt`
+    document.body.appendChild(a); a.click()
+    document.body.removeChild(a); URL.revokeObjectURL(url)
+  }, [messages])
+
+  const openPreview = useCallback(async (docId: string) => {
+    setPreviewDocId(docId)
+    setPreviewLoading(true)
+    try {
+      const res = await fetch(`${API}/api/v1/documents/${docId}/content`)
+      if (!res.ok) throw new Error((await res.json()).detail ?? 'Cannot load preview.')
+      const data = await res.json()
+      setPreviewContent({ filename: data.filename, file_type: data.file_type, content: data.content })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Preview failed.')
+      setPreviewDocId(null)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }, [])
+  const closePreview = useCallback(() => { setPreviewDocId(null); setPreviewContent(null) }, [])
   const toggleInspector = useCallback(() => setShowInspector(prev => !prev), [])
   const toggleDark = useCallback(() => setDark(prev => !prev), [])
 
@@ -156,7 +341,7 @@ export default function App() {
     const userMsgId = nextMessageId(); const assistantMsgId = nextMessageId()
     setMessages(old => [...old, { id: userMsgId, role: 'user', text: query }, { id: assistantMsgId, role: 'assistant', text: '' }]); setQuestion(''); setLoading(true); setError('')
     try {
-      const payload = { query, top_k: 6, document_ids: selectedIds, collection_name: filterCollection === 'All collections' ? null : filterCollection }
+      const payload = { query, history: conversationHistory(messages), top_k: 6, document_ids: selectedIds, collection_name: filterCollection === 'All collections' ? null : filterCollection }
       const response = await fetch(`${API}/api/v1/query/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: controller.signal })
       if (!response.ok || !response.body) { const data = await response.json(); throw new Error(data.detail ?? 'Unable to answer this question.') }
       const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''; let fullAnswer = ''
@@ -173,33 +358,72 @@ export default function App() {
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return
       setError(e instanceof Error ? e.message : 'Request failed.')
-    } finally { setLoading(false) }
+    } finally { setLoading(false); queryClient.invalidateQueries({ queryKey: ['history'] }) }
+  }
+
+  function loadHistoryEntry(entry: HistoryEntry) {
+    const userMsg: Message = { id: nextMessageId(), role: 'user', text: entry.query }
+    const assistantMsg: Message = { id: nextMessageId(), role: 'assistant', text: entry.answer, result: { answer: entry.answer, citations: entry.citations, confidence: entry.confidence, evidence_status: entry.evidence_status, retrieval_debug: [] } }
+    setMessages([userMsg, assistantMsg])
+    setActiveView('workspace')
   }
 
   return <main className={dark ? 'app dark' : 'app'}>
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">◇</span><span>TraceRAG</span></div>
       <button className="new-chat" onClick={clearMessages}>＋ New investigation</button>
-      <nav><button className="nav-active">▣ Evidence workspace</button><button onClick={toggleInspector}>⌘ Retrieval lab</button></nav>
+      <nav><button className={activeView === 'workspace' ? 'nav-active' : ''} onClick={() => setActiveView('workspace')}>▣ Evidence workspace</button><button className={activeView === 'history' ? 'nav-active' : ''} onClick={() => setActiveView('history')}>⏱ Query history</button><button onClick={toggleInspector}>⌘ Retrieval lab</button></nav>
       <div className="sidebar-bottom"><button onClick={toggleDark}>{dark ? '☀ Light theme' : '◐ Dark theme'}</button><span>Grounded answers, inspectable evidence.</span></div>
     </aside>
     <section className="library">
-      <header><div><p className="eyebrow">KNOWLEDGE BASE</p><h1>Evidence library</h1></div><button className="refresh" onClick={() => documentsQuery.refetch()}>↻ Refresh</button></header>
-      <div className={`dropzone ${dragging ? 'dragging' : ''}`} onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave}>
-        <input id="file-upload" type="file" multiple accept=".pdf,.docx,.html,.htm,.txt,.md" onChange={chooseFiles} />
-        <label htmlFor="file-upload"><strong>{uploadMutation.isPending ? `Uploading ${(uploadMutation.variables?.length ?? 0)} file${(uploadMutation.variables?.length ?? 0) === 1 ? '' : 's'}…` : 'Drop documents here'}</strong><span>or browse files · PDF, DOCX, HTML, MD, TXT · 25 MB max</span></label>
-        <input aria-label="Collection name" value={collection} onChange={e => setCollection(e.target.value)} placeholder="Collection name" />
-      </div>
-      <div className="library-toolbar"><select value={filterCollection} onChange={e => setFilterCollection(e.target.value)}><option>All collections</option>{collections.map(name => <option key={name}>{name}</option>)}</select><span>{visibleDocs.length} documents</span></div>
-      <div className="documents">{visibleDocs.length === 0 ? <p className="empty">Add a source to begin investigating.</p> : visibleDocs.map(doc => <DocumentItem key={doc.id} doc={doc} selected={selectedIds.includes(doc.id)} onToggle={toggleDocSelection} onDelete={removeDocument} />)}</div>
+      {activeView === 'history' ? <>
+        <header><div><p className="eyebrow">SEARCH HISTORY</p><h1>Past queries</h1></div><button className="refresh" onClick={() => historyQuery.refetch()}>↻ Refresh</button></header>
+        <div className="history-list">
+          {historyQuery.isLoading && <p className="empty">Loading history…</p>}
+          {historyQuery.data && historyQuery.data.items.length === 0 && <p className="empty">No queries yet. Ask a question to get started.</p>}
+          {historyQuery.data?.items.map(entry => (
+            <div key={entry.id} className="history-item" onClick={() => loadHistoryEntry(entry)}>
+              <button className="delete" onClick={e => { e.stopPropagation(); deleteHistoryMutation.mutate(entry.id) }} aria-label="Delete history entry">×</button>
+              <strong>{entry.query.length > 80 ? entry.query.slice(0, 80) + '…' : entry.query}</strong>
+              <small>
+                <span className={`evidence-badge ${entry.evidence_status}`}>{Math.round(entry.confidence * 100)}%</span>
+                {' · '}{entry.collection_name ?? 'All collections'}
+                {' · '}{new Date(entry.created_at).toLocaleDateString()}
+              </small>
+            </div>
+          ))}
+        </div>
+      </> : <>
+        <header><div><p className="eyebrow">KNOWLEDGE BASE</p><h1>Evidence library</h1></div><button className="refresh" onClick={() => documentsQuery.refetch()}>↻ Refresh</button></header>
+        <div className={`dropzone ${dragging ? 'dragging' : ''}`} onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave}>
+          <input id="file-upload" type="file" multiple accept=".pdf,.docx,.html,.htm,.txt,.md,.csv,.xlsx" onChange={chooseFiles} />
+          <label htmlFor="file-upload"><strong>{uploadMutation.isPending ? `Uploading ${(uploadMutation.variables?.length ?? 0)} file${(uploadMutation.variables?.length ?? 0) === 1 ? '' : 's'}…` : 'Drop documents here'}</strong><span>or browse files · PDF, DOCX, HTML, MD, TXT, CSV, XLSX · 25 MB max</span></label>
+          <input aria-label="Collection name" value={collection} onChange={e => setCollection(e.target.value)} placeholder="Collection name" />
+        </div>
+        {documents.length > 0 && <div className="library-stats">
+          <span>{libraryStats.totalDocs} docs</span>
+          <span>{formatFileSize(libraryStats.totalSize)}</span>
+          <span>{libraryStats.collectionCount} collection{libraryStats.collectionCount !== 1 ? 's' : ''}</span>
+          <span>{libraryStats.readyCount} ready</span>
+        </div>}
+        <div className="library-toolbar">
+          <select value={filterCollection} onChange={e => setFilterCollection(e.target.value)}><option>All collections</option>{collections.map(name => <option key={name}>{name}</option>)}</select>
+          <input className="doc-search" value={searchFilter} onChange={e => setSearchFilter(e.target.value)} placeholder="Search documents…" aria-label="Search documents" />
+          {visibleDocs.length > 0 && <button className="select-all" onClick={selectAllVisible}>{visibleDocs.every(d => selectedIds.includes(d.id)) ? 'Deselect all' : 'Select all'}</button>}
+          {selectedIds.length > 0 && <button className="bulk-delete" onClick={bulkDelete} disabled={bulkDeleteMutation.isPending}>{bulkDeleteMutation.isPending ? 'Deleting…' : `Delete ${selectedIds.length} selected`}</button>}
+          <span>{visibleDocs.length} documents</span>
+        </div>
+        <div className="documents">{visibleDocs.length === 0 ? <p className="empty">Add a source to begin investigating.</p> : visibleDocs.map(doc => <DocumentItem key={doc.id} doc={doc} selected={selectedIds.includes(doc.id)} onToggle={toggleDocSelection} onDelete={removeDocument} onPreview={openPreview} onDownload={downloadDocument} />)}</div>
+      </>}
     </section>
     <section className="chat">
-      <header><div><p className="eyebrow">RESEARCH CONSOLE</p><h2>Ask your evidence</h2></div><span className="scope">{selectedIds.length ? `${selectedIds.length} selected sources` : filterCollection}</span></header>
+      <header><div><p className="eyebrow">RESEARCH CONSOLE</p><h2>Ask your evidence</h2></div><div className="chat-actions">{messages.length > 0 && <button className="export-btn" onClick={exportConversation} title="Export conversation">↗ Export</button>}<span className="scope">{selectedIds.length ? `${selectedIds.length} selected sources` : filterCollection}</span></div></header>
       <div className="messages">{messages.length === 0 && <div className="welcome"><span>✦</span><h3>Turn documents into defensible answers.</h3><p>Ask a question, open every source, and inspect how retrieval chose its evidence.</p><div className="suggestions"><button onClick={() => setQuestion('What are the main conclusions across these documents?')}>Summarize the conclusions</button><button onClick={() => setQuestion('Where do these documents disagree?')}>Find disagreements</button></div></div>}
-      {messages.map(message => <MessageItem key={message.id} message={message} showInspector={showInspector} onCitationClick={handleCitationClick} />)}{loading && <article className="message assistant"><div className="avatar">◇</div><div className="typing"><i></i><i></i><i></i> Retrieving evidence…</div></article>}</div>
+      {messages.map(message => <MessageItem key={message.id} message={message} showInspector={showInspector} onCitationClick={handleCitationClick} />)}{loading && <article className="message assistant"><div className="avatar">◇</div><div className="typing"><i></i><i></i><i></i> Retrieving evidence…</div></article>}<div ref={messagesEndRef} /></div>
       <form className="composer" onSubmit={ask}><textarea value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(e) } }} placeholder="Ask a question about your evidence…" rows={2}/><button type="submit" disabled={loading || !question.trim()}>Send ↑</button><small>Press Enter to send · Shift + Enter for new line</small></form>
       {(error || documentsQuery.isError) && <p className="error">{error || 'Cannot reach the API. Start the FastAPI backend to use the workspace.'}</p>}
     </section>
     {activeCitation && <div className="modal-backdrop" role="dialog" aria-label="Source evidence" onClick={closeCitation} onKeyDown={e => { if (e.key === 'Escape') closeCitation() }}><aside className="citation-modal" onClick={e => e.stopPropagation()}><button onClick={closeCitation}>×</button><p className="eyebrow">SOURCE EVIDENCE</p><h3>{activeCitation.filename}{activeCitation.page_number ? ` · page ${activeCitation.page_number}` : ''}</h3><p>{activeCitation.excerpt}</p><footer>Semantic similarity: {Math.round(activeCitation.similarity * 100)}%</footer></aside></div>}
+    {previewDocId && <div className="modal-backdrop" role="dialog" aria-label="Document preview" onClick={closePreview} onKeyDown={e => { if (e.key === 'Escape') closePreview() }}><aside className="preview-modal" onClick={e => e.stopPropagation()}><button onClick={closePreview}>×</button>{previewLoading ? <p className="preview-loading">Loading preview…</p> : previewContent ? <><p className="eyebrow">DOCUMENT PREVIEW</p><h3><span className="file-type" style={{ marginRight: 8 }}>{fileIcon(previewContent.file_type)}</span>{previewContent.filename}</h3><div className="preview-body">{renderPreviewContent(previewContent.content, previewContent.file_type)}</div></> : null}</aside></div>}
   </main>
 }
