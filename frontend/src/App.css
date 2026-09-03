@@ -35,4 +35,18 @@ button, input, textarea, select { font:inherit; } button { cursor:pointer; } .si
 .preview-table th { position:sticky; top:0; background:var(--soft); font-weight:700; text-align:left; }
 .preview-table th,.preview-table td { padding:6px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
 .preview-table tbody tr:hover { background:var(--soft); }
-@media(max-width:1000px){.app{grid-template-columns:190px 1fr}.library{display:none}}@media(max-width:680px){.app{display:block}.sidebar{min-height:auto;padding:14px;display:flex;flex-direction:row;align-items:center}.sidebar nav{display:none}.sidebar-bottom{display:contents}.sidebar-bottom span{display:none}.sidebar-bottom button{padding:8px;font-size:16px;margin-left:8px;background:transparent;border:0;color:#a9b7c8}.new-chat{margin-left:auto}.chat header{min-height:76px;padding:16px}.messages{padding:20px 16px}.composer{padding:12px 16px}.welcome{margin:11vh auto}.scope{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+
+/* The library only fits beside the chat on a wide screen. Narrower than that it
+   becomes a drawer rather than being hidden: it holds the dropzone, so hiding it
+   left tablet and phone users with no way to upload a document at all. */
+.library-toggle,.library-close,.library-backdrop{display:none}
+@media(max-width:1000px){
+  .app{grid-template-columns:190px 1fr}
+  .library{position:fixed;top:0;left:0;bottom:0;z-index:40;width:min(430px,88vw);transform:translateX(-101%);transition:transform .22s ease;box-shadow:0 18px 48px rgba(10,16,24,.28)}
+  .app.library-open .library{transform:none}
+  .library-backdrop{display:block;position:fixed;inset:0;z-index:35;border:0;padding:0;background:rgba(10,16,24,.45)}
+  .library-close{display:grid;place-items:center;position:absolute;top:13px;right:13px;z-index:2;width:30px;height:30px;padding:0;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--muted);font-size:13px}
+  .library-toggle{display:inline-flex;align-items:center;gap:6px;margin-right:12px;background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px 10px;font-size:12px;font-weight:650;white-space:nowrap}
+}
+@media(prefers-reduced-motion:reduce){.library{transition:none}}
+@media(max-width:680px){.app{display:block}.sidebar{min-height:auto;padding:14px;display:flex;flex-direction:row;align-items:center}.sidebar nav{display:none}.sidebar-bottom{display:contents}.sidebar-bottom span{display:none}.sidebar-bottom button{padding:8px;font-size:16px;margin-left:8px;background:transparent;border:0;color:#a9b7c8}.new-chat{margin-left:auto}.chat header{min-height:76px;padding:16px}.messages{padding:20px 16px}.composer{padding:12px 16px}.welcome{margin:11vh auto}.scope{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
