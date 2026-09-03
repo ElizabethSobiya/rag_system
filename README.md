@@ -19,6 +19,8 @@ retrieved chunks.
 ├── backend/            # FastAPI app (API, services, models)
 ├── frontend/           # React + Vite app
 ├── docker-compose.yml  # Complete local stack
+├── render.yaml         # Render Blueprint (deployment)
+├── DEPLOY.md           # Deployment walkthrough
 └── .env.example        # Copy to .env and fill in
 ```
 
@@ -101,6 +103,19 @@ yarn dev
 The app runs at http://localhost:5173. Use Yarn for this project; its committed
 `yarn.lock` guarantees the dependency versions used by the app. Node.js 20 or
 later is recommended.
+
+## Deployment
+
+The app deploys to Render (backend container + static frontend) against a
+Supabase Postgres database. [`render.yaml`](render.yaml) declares both Render
+services; [DEPLOY.md](DEPLOY.md) is the step-by-step walkthrough.
+
+Two things differ from the local setup and are easy to miss:
+
+- `VITE_API_BASE_URL` is read at **build** time and inlined into the bundle, so
+  changing it requires a rebuild rather than a restart.
+- `CORS_ORIGINS` is parsed as a JSON array (`["https://example.com"]`), not a
+  bare hostname.
 
 ## Environment variables
 

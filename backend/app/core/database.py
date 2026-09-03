@@ -8,9 +8,11 @@ from app.core.config import settings
 engine = create_async_engine(
     settings.database_url,
     echo=False,
+    # A hosted pooler recycles server-side connections underneath us, so a
+    # pooled connection can be dead by the time it is checked out again.
     pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
 )
 
 AsyncSessionLocal = async_sessionmaker(
