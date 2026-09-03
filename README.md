@@ -108,7 +108,7 @@ later is recommended.
 
 The backend container deploys to Render and the frontend to Vercel, against a
 Supabase Postgres database. [`render.yaml`](render.yaml) declares the Render
-service and [`vercel.json`](vercel.json) the Vercel build;
+service; Vercel builds `frontend/` from its project settings.
 [DEPLOY.md](DEPLOY.md) is the step-by-step walkthrough.
 
 Two things differ from the local setup and are easy to miss:

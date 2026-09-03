@@ -2,8 +2,10 @@
 
 Three pieces: a **Supabase** Postgres database, a **Render** Docker web service
 for the FastAPI backend, and a **Vercel** project for the React frontend.
-[`render.yaml`](render.yaml) declares the Render service and
-[`vercel.json`](vercel.json) the Vercel build; Supabase is set up by hand once.
+[`render.yaml`](render.yaml) declares the Render service; Vercel builds the
+frontend from its own project settings, with
+[`frontend/vercel.json`](frontend/vercel.json) adding response headers. Supabase
+is set up by hand once.
 
 Work through the steps in order — step 3 needs the database URL from step 1, and
 step 6 needs hostnames that Render and Vercel only assign once each service has
@@ -100,12 +102,19 @@ and deploy from there.
 ## 5. Create the Vercel project (frontend)
 
 1. In [Vercel](https://vercel.com): **Add New → Project**, import `rag_system`.
-2. [`vercel.json`](vercel.json) at the repository root drives the build, so the
-   defaults are correct as imported: it builds inside `frontend/` and publishes
-   `frontend/dist`. Leave the Root Directory as the repository root. Setting Root
-   Directory to `frontend` also works, but then Vercel ignores the root
-   `vercel.json` and you must set the build command and output directory by hand.
-3. **Settings → Environment Variables**, add for *Production* (and *Preview* if
+   Point it at the branch you deploy from — it defaults to `main`, so a fix
+   pushed only to `dev` will not be built.
+2. **Settings → General → Root Directory: `frontend`.** The repository root has
+   no `package.json`, so a build from there fails at the install step before it
+   reaches any frontend code.
+3. Leave **Build & Development Settings** on their defaults, with every override
+   toggled off. Vercel detects Vite inside `frontend/` and derives
+   `yarn install` / `yarn build` / `dist` on its own; a stale Build or Install
+   Command override saved on the project silently wins over that detection and
+   is worth checking first when a build fails.
+   [`frontend/vercel.json`](frontend/vercel.json) only adds response headers — it
+   deliberately sets no build fields, so there is one source of truth.
+4. **Settings → Environment Variables**, add for *Production* (and *Preview* if
    you want preview deployments to reach the API):
 
    ```
@@ -116,7 +125,7 @@ and deploy from there.
    itself. This is the only variable the frontend reads; it is the sole
    `import.meta.env` reference in the source.
 
-4. **Deployments → Redeploy.** Vite inlines this value into the JavaScript bundle
+5. **Deployments → Redeploy.** Vite inlines this value into the JavaScript bundle
    at build time, so any build that ran before the variable existed still has the
    `http://localhost:8000` fallback from
    [`frontend/src/App.tsx`](frontend/src/App.tsx) baked in. A redeploy is
@@ -173,9 +182,9 @@ then fails every API call in the browser console. Add the preview origins you
 care about to the array, or test against the production URL.
 
 **`frontend/Dockerfile` and `frontend/nginx.conf` are not used in production.**
-They serve the frontend under `docker-compose` for local work. Vercel builds from
-[`vercel.json`](vercel.json) and serves the static output directly, so editing
-the nginx config changes nothing about the deployed site.
+They serve the frontend under `docker-compose` for local work. Vercel runs Vite
+and serves the static output directly, so editing the nginx config changes
+nothing about the deployed site.
 
 **Memory.** The free plan caps at 512MB, and PyMuPDF plus tiktoken put this image
 near that ceiling. If the logs show the service restarting during uploads, that is
